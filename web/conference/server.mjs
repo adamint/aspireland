@@ -13,8 +13,9 @@ const mimeTypes = {
   ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml",
   ".woff": "font/woff", ".woff2": "font/woff2",
+  ".txt": "text/plain; charset=utf-8",
 };
-const assetPattern = /^assets\/[A-Za-z0-9_-]+\.(?:js|css|woff2?)$/;
+const assetPattern = /^assets\/(?:[A-Za-z0-9_-]+\.(?:js|css|woff2?)|inter-OFL-[A-Za-z0-9_-]+\.txt)$/;
 const sha256 = (data) => createHash("sha256").update(data).digest("hex");
 
 class HttpError extends Error {

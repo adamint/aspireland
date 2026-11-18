@@ -78,6 +78,25 @@ it("uses passenger-facing station and platform labels in itinerary cards", () =>
   expect(screen.getByText(/2 min walk/)).toBeTruthy();
 });
 
+it.each([
+  [60, 100, false, "Space available", "60 of 100 passenger capacity"],
+  [61, 100, false, "Busy", "61 of 100 passenger capacity"],
+  [85, 100, false, "Busy", "85 of 100 passenger capacity"],
+  [86, 100, false, "Very crowded", "86 of 100 passenger capacity"],
+  [0, 0, false, "Capacity not reported", "0 people onboard; passenger capacity not reported."],
+  [86, 100, true, "Live crowding unavailable", "Updates are delayed."],
+] as const)("gives rider crowding context for %s/%s (stale: %s)", (load, capacity, stale, label, detail) => {
+  const board: StationBoard = { stationId: "university", scenarioId: "current", generation: 4, asOf: journey.asOf,
+    updatedAt: journey.asOf, stale, restrictions: [],
+    arrivals: [{ trainId: "green-1", line: "Green", service: "local", platform: "university:Green:+", destination: "southbank",
+      seconds: 60, predictionKind: "live", status: "on-time", load, capacity }] };
+  const view = render(<StationBoardView passenger board={board} network={network} scenarioId="current" generation={4} loading={false} error={null} />);
+  expect(screen.getByRole("columnheader", { name: "Onboard crowding" })).toBeTruthy();
+  expect(screen.getByText(label)).toBeTruthy();
+  expect(screen.getByText(detail)).toBeTruthy();
+  if (stale || capacity === 0) expect(view.container.querySelector(".load-meter")).toBeNull();
+});
+
 it("separates multi-stop travel, waits and exits without internal IDs", () => {
   const longer: JourneyResult = {
     ...journey,

@@ -96,7 +96,11 @@ it("offers a stable train directory with keyboard activation and current selecti
   fireEvent.click(summary);
   expect(within(directory).getByRole("list")).toBeTruthy();
   const buttons = within(directory).getAllByRole("button");
-  expect(buttons.map((button) => button.textContent?.match(/blue-\d/)?.[0])).toEqual(["blue-1", "blue-2"]);
+  expect(buttons.map((button) => button.textContent)).toEqual([
+    expect.stringContaining("Blue, next stop Two"),
+    expect.stringContaining("Blue, next stop Two"),
+  ]);
+  expect(directory.textContent).not.toMatch(/blue-\d/);
   expect(buttons[1].getAttribute("aria-pressed")).toBe("true");
   fireEvent.click(buttons[1]);
   expect(onSelectTrain).toHaveBeenLastCalledWith("blue-2");
@@ -109,6 +113,21 @@ it("offers a stable train directory with keyboard activation and current selecti
   fireEvent.keyDown(marker, { key: " " });
   expect(onSelectTrain).toHaveBeenLastCalledWith("blue-1");
   expect(within(view.getByRole("group", { name: /Interactive Aspireland metro map/ })).getByRole("button", { name: /^blue-2,/ }).getAttribute("aria-pressed")).toBe("true");
+});
+
+it("uses plain colored passenger markers and hides out-of-service stock without changing Dispatch", () => {
+  const trains = [train, { ...train, id: "reserve-ba", state: "reserve" }, { ...train, id: "withdrawn", state: "withdrawn" }];
+  const props = { network, world: { ...world, trains }, onSelectStation: vi.fn(), onSelectTrain: vi.fn() };
+  const view = render(<NetworkMap {...props} calm />);
+  expect(view.container.querySelectorAll(".map-train")).toHaveLength(1);
+  expect(view.container.querySelector(".map-train text")).toBeNull();
+  expect(view.container.querySelector(".map-train .train-window")).toBeNull();
+  expect(within(view.getByRole("group", { name: /Interactive Aspireland metro map/ })).getByRole("button", { name: /Blue, next stop Two/ })).toBeTruthy();
+  const directory = view.getByText("Find a train").closest("details")!;
+  expect(directory.textContent).not.toMatch(/reserve|withdrawn/i);
+  view.rerender(<NetworkMap {...props} />);
+  expect(view.container.querySelectorAll(".map-train")).toHaveLength(3);
+  expect(view.container.querySelector(".map-train text")?.textContent).toBe("blue-1");
 });
 
 it("does not trap ordinary wheel scrolling and zooms through explicit controls", () => {

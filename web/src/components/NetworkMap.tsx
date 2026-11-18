@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { isWaitingCohort } from "../cohorts";
 import { lineFor } from "../format";
-import { publicTrainStatus } from "../passengerData";
+import { publicOnboardCrowding, publicTrainLabel, publicTrainStatus } from "../passengerData";
 import type {
   Incident,
   MapLayer,
@@ -21,6 +21,7 @@ interface NetworkMapProps {
   onSelectStation: (stationId: string) => void;
   onSelectTrain?: (trainId: string) => void;
   calm?: boolean;
+  stale?: boolean;
 }
 
 interface Point {
@@ -491,6 +492,7 @@ export function NetworkMap({
   onSelectStation,
   onSelectTrain,
   calm = false,
+  stale = false,
 }: NetworkMapProps) {
   const [mode, setMode] = useState<MapMode>("city");
   const [layer, setLayer] = useState<MapLayer>("service");
@@ -498,6 +500,10 @@ export function NetworkMap({
   const drag = useRef<{ x: number; y: number; viewX: number; viewY: number } | null>(null);
   const reducedMotion = useReducedMotion();
   const simulatedNow = useAnimatedSimTime(world, reducedMotion);
+  const visibleTrains = useMemo(
+    () => calm ? world.trains.filter((train) => !["reserve", "withdrawn"].includes(train.state)) : world.trains,
+    [calm, world.trains],
+  );
 
   const points = useMemo(
     () =>
@@ -536,7 +542,7 @@ export function NetworkMap({
 
   const trainVisuals = useMemo(() => {
     const groups = new Map<string, Array<{ train: TrainState; point: Point }>>();
-    for (const train of world.trains) {
+    for (const train of visibleTrains) {
       const grant = train.activeGrantId ? grantsById.get(train.activeGrantId) : undefined;
       const authoritativeGrant = grant?.trainId === train.id && !grant.completed ? grant : undefined;
       const point = trainPosition(train, authoritativeGrant, points, simulatedNow, reducedMotion);
@@ -564,11 +570,11 @@ export function NetworkMap({
         };
       });
     }).sort((left, right) => left.train.id.localeCompare(right.train.id));
-  }, [calm, grantsById, points, reducedMotion, simulatedNow, world.trains]);
+  }, [calm, grantsById, points, reducedMotion, simulatedNow, visibleTrains]);
 
   const directoryTrains = useMemo(
-    () => [...world.trains].sort((left, right) => left.id.localeCompare(right.id)),
-    [world.trains],
+    () => [...visibleTrains].sort((left, right) => left.id.localeCompare(right.id)),
+    [visibleTrains],
   );
 
   const axPath = useMemo(() => {
@@ -617,7 +623,9 @@ export function NetworkMap({
       {trainVisuals.map(({ train, point, offset }) => {
         const line = lineFor(network, train.line);
         const selected = train.id === selectedTrainId;
-        const crowding = train.capacity > 0 ? `${Math.round(train.load / train.capacity * 100)}% full` : "capacity unknown";
+        const occupancy = publicOnboardCrowding(train.load, train.capacity, stale);
+        const crowding = calm ? `Onboard crowding: ${occupancy.label}. ${occupancy.detail}` :
+          train.capacity > 0 ? `${Math.round(train.load / train.capacity * 100)}% full` : "capacity unknown";
         const hasIncident = (incidentByTarget.get(train.id)?.length ?? 0) > 0;
         return (
           <g
@@ -628,7 +636,7 @@ export function NetworkMap({
             tabIndex={onSelectTrain ? 0 : undefined}
             aria-hidden={onSelectTrain ? undefined : true}
             aria-pressed={onSelectTrain && calm ? selected : undefined}
-            aria-label={onSelectTrain ? `${train.id}, ${line?.name ?? (calm ? "Not in service" : train.line)}, ${crowding}, ${calm ? publicTrainStatus(train.state) : train.state}${!calm && train.holdReason ? `, ${train.holdReason}` : ""}` : undefined}
+            aria-label={onSelectTrain ? `${train.id}, ${calm ? publicTrainLabel(train, network) : line?.name ?? train.line}, ${crowding}, ${calm ? publicTrainStatus(train.state) : train.state}${!calm && train.holdReason ? `, ${train.holdReason}` : ""}` : undefined}
             data-map-action={onSelectTrain ? true : undefined}
             pointerEvents={onSelectTrain ? undefined : "none"}
             onPointerDown={onSelectTrain && calm ? (event) => {
@@ -641,10 +649,12 @@ export function NetworkMap({
             onKeyDown={onSelectTrain ? (event) => keyActivate(event, () => onSelectTrain(train.id)) : undefined}
           >
             <rect x="-18" y="-11" width="36" height="22" rx="5" fill={line?.color ?? "#fff"} />
-            <rect x="-11" y="-6" width="14" height="8" rx="1" className="train-window" />
-            <path d="M8-7h6v14H8z" className="train-window" />
-            <path d="M-12 12h24" />
-            <text y="-16" textAnchor="middle">{train.id}</text>
+            {!calm && <>
+              <rect x="-11" y="-6" width="14" height="8" rx="1" className="train-window" />
+              <path d="M8-7h6v14H8z" className="train-window" />
+              <path d="M-12 12h24" />
+              <text y="-16" textAnchor="middle">{train.id}</text>
+            </>}
             {onSelectTrain && calm && (
               <circle className="map-train-hit-target" r="1" fill="transparent" stroke="transparent" strokeWidth="44" vectorEffect="non-scaling-stroke" pointerEvents="all" />
             )}
@@ -664,7 +674,7 @@ export function NetworkMap({
         <div className="segmented" aria-label="Map layer">
           {(["service", "crowding", "incidents"] as MapLayer[]).map((value) => (
             <button key={value} className={layer === value ? "active" : ""} onClick={() => setLayer(value)}>
-              {value[0].toUpperCase() + value.slice(1)}
+              {calm && value === "crowding" ? "People waiting" : value[0].toUpperCase() + value.slice(1)}
             </button>
           ))}
         </div>
@@ -675,6 +685,7 @@ export function NetworkMap({
         </div>
       </div>
 
+      {calm && layer === "crowding" && <p className="map-crowding-key">{stale ? "Last reported numbers" : "Numbers"} show people waiting to enter or board, not platform totals.</p>}
       <div className="map-frame">
         <svg
           className="network-map"
@@ -820,12 +831,12 @@ export function NetworkMap({
                   aria-pressed={train.id === selectedTrainId}
                   onClick={() => onSelectTrain(train.id)}
                 >
-                  <span>{train.id} · {lineFor(network, train.line)?.name ?? "Not in service"}</span>{" "}
-                  <small>{publicTrainStatus(train.state)}{!["reserve", "withdrawn"].includes(train.state) && ` · ${train.capacity > 0 ? `${Math.round(train.load / train.capacity * 100)}% full` : "Capacity unknown"}`}</small>
+                  <span>{publicTrainLabel(train, network)}</span>{" "}
+                  <small>{publicTrainStatus(train.state)} · Onboard crowding: {publicOnboardCrowding(train.load, train.capacity, stale).label}. {publicOnboardCrowding(train.load, train.capacity, stale).detail}</small>
                 </button>
               </li>
             ))}
-            {directoryTrains.length === 0 && <li className="empty-state">No trains reported.</li>}
+            {directoryTrains.length === 0 && <li className="empty-state">No trains in service reported.</li>}
           </ul>
         </details>
       )}

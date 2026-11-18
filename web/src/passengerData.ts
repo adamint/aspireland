@@ -1,4 +1,27 @@
 import type { Incident, LineDefinition, NetworkDefinition, TrainState } from "./types";
+import { stationName } from "./format";
+
+export function publicTrainLabel(train: TrainState, network: NetworkDefinition): string {
+  const service = network.lines.find((line) => line.id === train.line)?.name ?? "Train";
+  return train.nextStationId ? `${service}, next stop ${stationName(network, train.nextStationId)}` :
+    `${service}, last reported at ${stationName(network, train.stationId)}`;
+}
+
+export function publicOnboardCrowding(load: number, capacity: number, stale = false): {
+  label: string; detail: string; ratio: number | null;
+} {
+  if (stale) return { label: "Live crowding unavailable", detail: "Updates are delayed.", ratio: null };
+  if (!Number.isFinite(load) || load < 0) return { label: "Crowding not reported", detail: "Passenger numbers are unavailable.", ratio: null };
+  if (!Number.isFinite(capacity) || capacity <= 0) {
+    return { label: "Capacity not reported", detail: `${load.toLocaleString()} people onboard; passenger capacity not reported.`, ratio: null };
+  }
+  const ratio = load / capacity;
+  return {
+    label: ratio > 0.85 ? "Very crowded" : ratio > 0.6 ? "Busy" : "Space available",
+    detail: `${load.toLocaleString()} of ${capacity.toLocaleString()} passenger capacity`,
+    ratio,
+  };
+}
 
 export function publicTrainStatus(state: string): string {
   const labels: Record<string, string> = {

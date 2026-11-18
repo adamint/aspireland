@@ -59,6 +59,18 @@ button:active:not(:disabled) { transform: translateY(1px); }
   text-transform: uppercase;
 }
 html[data-site], .passenger-app { background: var(--cream); color: var(--ink); }
+html[data-site="passenger"], .passenger-app {
+  --font-sans: "Inter Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-data: var(--font-sans);
+  --cream: #F8F6F0;
+  --paper: #FFFEFA;
+  --border: #DDD7CC;
+  --aspire-grey: #E8E2D8;
+}
+.font-license-link { color: inherit; text-underline-offset: 3px; }
+.public-crowding { display: grid; gap: 4px; }
+.map-crowding-key { margin: 0; padding: 10px 16px; color: var(--muted); font-size: .8rem; border-bottom: 1px solid var(--border); }
+.crowding-cell-title { display: none; }
 .app-loading, .app-loading.passenger-theme { background: var(--cream); color: var(--ink); }
 .page-loading > p { margin: 0; color: var(--muted); line-height: 1.5; }
 .status-dot--unknown { background: var(--muted); box-shadow: none; }
@@ -272,6 +284,24 @@ html[data-site], .passenger-app { background: var(--cream); color: var(--ink); }
   .station-page-updated { grid-column: 1 / -1; justify-self: start; justify-items: start; text-align: left; }
 }
 .station-info-metrics div { background: var(--cream); }
+.passenger-app .arrival-board .arrival-row > span:last-child { display: block; }
+.passenger-app .arrival-board--compact .arrival-row,
+.passenger-app .assistant-arrivals .arrival-row { grid-template-columns: .75fr 1.25fr .8fr; }
+.passenger-app .arrival-board--compact .arrival-row > span:last-child,
+.passenger-app .assistant-arrivals .arrival-row > span:last-child { grid-column: 1 / -1; }
+.passenger-app .arrival-board--compact .arrival-row--head > span:last-child,
+.passenger-app .assistant-arrivals .arrival-row--head > span:last-child {
+  position: absolute; width: 1px; height: 1px; padding: 0; border: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+}
+.passenger-app .arrival-board--compact .crowding-cell-title,
+.passenger-app .assistant-arrivals .crowding-cell-title { display: inline; }
+@media (max-width: 600px) {
+  .passenger-app .arrival-board .arrival-row > span:last-child { grid-column: 1 / -1; }
+  .passenger-app .arrival-board .arrival-row--head > span:last-child {
+    position: absolute; width: 1px; height: 1px; padding: 0; border: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+  }
+  .passenger-app .crowding-cell-title { display: inline; }
+}
 .public-access-edge { border-color: var(--border); }
 .public-access-edge > span { color: var(--brand); background: var(--brand-tint); border-radius: var(--sign-radius); }
 .station-page-art { background: var(--aspire-secondary); border-color: var(--brand); }

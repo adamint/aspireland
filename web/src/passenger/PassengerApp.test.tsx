@@ -211,7 +211,9 @@ it("opens read-only train details and restores arrivals when the same station is
   expect(within(details).getByText("Westhaven")).toBeTruthy();
   expect(within(details).getByText("Next station")).toBeTruthy();
   expect(within(details).getByText("Central Exchange")).toBeTruthy();
-  expect(within(details).getByText("60 / 100 passengers · 60% full")).toBeTruthy();
+  expect(within(details).getByText("Onboard crowding")).toBeTruthy();
+  expect(within(details).getByText("Space available")).toBeTruthy();
+  expect(within(details).getByText("60 of 100 passenger capacity")).toBeTruthy();
   expect(within(details).queryByText(/\bETA\b|arriv.*min|\bhold\b|release|withdraw|deploy/i)).toBeNull();
   expect(screen.getByRole("button", { name: /^blue-1,/ }).getAttribute("aria-pressed")).toBe("true");
 
@@ -235,21 +237,31 @@ it("keeps keyboard-selected train details current without inventing unknown loca
   showWorld({ ...baseWorld, version: 2, trains: [{ ...train, nextStationId: null, capacity: 0 }] });
   view.rerender(<PassengerApp />);
   expect(document.activeElement).toBe(marker);
-  expect(marker.getAttribute("aria-label")).toContain("capacity unknown");
+  expect(marker.getAttribute("aria-label")).toContain("Capacity not reported");
 
   showWorld({ ...baseWorld, version: 3, trains: [{ ...train, stationId: "unknown", nextStationId: null, capacity: 0 }] });
   view.rerender(<PassengerApp />);
   expect(within(details).getAllByText("Not reported")).toHaveLength(2);
-  expect(within(details).getByText("60 passengers · capacity unknown")).toBeTruthy();
+  expect(within(details).getByText("60 people onboard; passenger capacity not reported.")).toBeTruthy();
   expect(details.textContent).not.toContain("unknown%");
 
   showWorld({ ...baseWorld, version: 4, trains: [{ ...train, state: "held", stationId: "central-exchange", nextStationId: null, load: 20 }] });
   view.rerender(<PassengerApp />);
   expect(within(details).getByText("Waiting at the station")).toBeTruthy();
   expect(within(details).getByText("Current station")).toBeTruthy();
-  expect(within(details).getByText("20 / 100 passengers · 20% full")).toBeTruthy();
+  expect(within(details).getByText("20 of 100 passenger capacity")).toBeTruthy();
   fireEvent.click(within(details).getByRole("button", { name: /Back to Central Exchange arrivals/ }));
   expect(within(details).getByText("Arrivals")).toBeTruthy();
+});
+
+it.each([[true, null], [false, "Refresh failed"]] as const)("does not score old train crowding (%s, %s)", (stale, error) => {
+  showWorld({ ...baseWorld, trains: [train] }, stale, error);
+  render(<PassengerApp />);
+  fireEvent.click(screen.getByRole("button", { name: /^blue-1,/ }));
+  const details = screen.getByRole("complementary", { name: "Map details" });
+  expect(within(details).getByText("Live crowding unavailable")).toBeTruthy();
+  expect(within(details).queryByText("Space available")).toBeNull();
+  expect(within(details).queryByText(/of 100 passenger capacity/)).toBeNull();
 });
 
 it("does not offer dead train buttons on a station mini-map", () => {
@@ -309,11 +321,9 @@ it("does not label old station access as open or available", () => {
   expect(within(access).queryByText(/^(Open|Available)$/)).toBeNull();
 });
 
-it("clearly identifies reserve trains as not in service", () => {
+it("does not offer reserve trains on the rider map or train directory", () => {
   showWorld({ ...baseWorld, trains: [{ ...train, id: "reserve-ba", state: "reserve", line: "", nextStationId: null }] });
   render(<PassengerApp />);
-  fireEvent.click(screen.getByRole("button", { name: /^reserve-ba,/ }));
-  const details = screen.getByRole("complementary", { name: "Map details" });
-  expect(within(details).getByText("Reserve train — not in service")).toBeTruthy();
-  expect(within(details).queryByRole("link", { name: /status and stops/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /^reserve-ba,/ })).toBeNull();
+  expect(screen.getByRole("list", { name: "Trains", hidden: true }).textContent).not.toContain("reserve-ba");
 });

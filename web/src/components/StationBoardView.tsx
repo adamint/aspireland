@@ -1,5 +1,6 @@
 import { formatEta, formatPassengerDateTime, formatSimTimestamp, formatWallTimestamp, publicPlatformLabel, stationName, titleCase } from "../format";
 import type { NetworkDefinition, StationBoard } from "../types";
+import { publicOnboardCrowding } from "../passengerData";
 
 interface StationBoardViewProps {
   board: StationBoard | null;
@@ -56,10 +57,11 @@ export function StationBoardView({
           <span role="columnheader">Service</span>
           <span role="columnheader">Destination / platform</span>
           <span role="columnheader">Arrival</span>
-          <span role="columnheader">Crowding</span>
+          <span role="columnheader">{passenger ? "Onboard crowding" : "Crowding"}</span>
         </div>
         {board.arrivals.map((arrival) => {
           const ratio = arrival.load / Math.max(1, arrival.capacity);
+          const crowding = publicOnboardCrowding(arrival.load, arrival.capacity, unavailable);
           const destination = stationName(network, arrival.destination);
           const terminatesHere = arrival.destination === board.stationId;
           const publicPlatform = publicPlatformLabel(network, board.stationId, arrival.line, arrival.destination, arrival.platform);
@@ -80,10 +82,19 @@ export function StationBoardView({
                 {!unavailable && <small>{arrival.predictionKind === "live" ? "Live update" : "Estimated"} · {titleCase(arrival.status)}</small>}
               </span>
               <span role="cell">
-                <span className={`load-meter ${ratio > 0.85 ? "critical" : ratio > 0.6 ? "busy" : ""}`}>
-                  <i style={{ width: `${Math.min(100, ratio * 100)}%` }} />
-                </span>
-                <small>{arrival.load}/{arrival.capacity}</small>
+                {passenger ? <>
+                  <span className="crowding-cell-title" aria-hidden="true">Onboard crowding: </span>
+                  <strong>{crowding.label}</strong>
+                  {crowding.ratio !== null && <span aria-hidden="true" className={`load-meter ${crowding.ratio > 0.85 ? "critical" : crowding.ratio > 0.6 ? "busy" : ""}`}>
+                    <i style={{ width: `${Math.min(100, crowding.ratio * 100)}%` }} />
+                  </span>}
+                  <small>{crowding.detail}</small>
+                </> : <>
+                  <span className={`load-meter ${ratio > 0.85 ? "critical" : ratio > 0.6 ? "busy" : ""}`}>
+                    <i style={{ width: `${Math.min(100, ratio * 100)}%` }} />
+                  </span>
+                  <small>{arrival.load}/{arrival.capacity}</small>
+                </>}
               </span>
             </div>
           );

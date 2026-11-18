@@ -7,7 +7,8 @@ import { StationBoardView } from "../components/StationBoardView";
 import { TransitBrand } from "../components/TransitBrand";
 import { formatPassengerDateTime, formatDateTimeLocal, formatDuration, lineFor, parseSimulatedLocalInput, stationName, titleCase, viewerTimeZone } from "../format";
 import { useCapabilities, useStationBoard, useWorld } from "../hooks";
-import { activeStationIncidents, lineIncidents, publicAlert, publicTrainStatus } from "../passengerData";
+import { activeStationIncidents, lineIncidents, publicAlert, publicOnboardCrowding, publicTrainStatus } from "../passengerData";
+import interLicense from "../inter-OFL.txt?url";
 import type { JourneyResult, NetworkDefinition, TrainState, WorldState } from "../types";
 
 function usePath() {
@@ -245,16 +246,15 @@ function TrainFacts({ train, network, stale }: { train: TrainState; network: Net
   const nextStation = network.stations.find((station) => station.id === train.nextStationId);
   const inService = !["reserve", "withdrawn"].includes(train.state);
   const locationLabel = stale || train.state === "uncertain" ? "Last reported station" : train.state === "travelling" ? "Departed" : "Current station";
+  const crowding = publicOnboardCrowding(train.load, train.capacity, stale);
   return (
     <dl className="public-train-facts">
       <div><dt>{stale ? "Last reported status" : "Status"}</dt><dd>{publicTrainStatus(train.state)}</dd></div>
       <div><dt>{locationLabel}</dt><dd>{currentStation?.name ?? "Not reported"}</dd></div>
       {inService && <div><dt>{stale ? "Last reported next station" : "Next station"}</dt><dd>{nextStation?.name ?? "Not reported"}</dd></div>}
       {inService && <div>
-        <dt>Crowding</dt>
-        <dd>{train.capacity > 0
-          ? `${train.load} / ${train.capacity} passengers · ${Math.round(train.load / train.capacity * 100)}% full`
-          : `${train.load} passengers · capacity unknown`}</dd>
+        <dt>Onboard crowding</dt>
+        <dd className="public-crowding"><strong>{crowding.label}</strong><span>{crowding.detail}</span></dd>
       </div>}
     </dl>
   );
@@ -279,7 +279,7 @@ function HomePage({
   const [selectedTrainId, setSelectedTrainId] = useState<string | null>(null);
   const board = useStationBoard(selectedStationId);
   const selectedStation = network.stations.find((station) => station.id === selectedStationId);
-  const selectedTrain = world.trains.find((train) => train.id === selectedTrainId);
+  const selectedTrain = world.trains.find((train) => train.id === selectedTrainId && !["reserve", "withdrawn"].includes(train.state));
   const selectedLine = selectedTrain ? lineFor(network, selectedTrain.line) : undefined;
   const activeIncidents = world.incidents.filter((incident) => incident.state === "active");
 
@@ -316,6 +316,7 @@ function HomePage({
             }}
             onSelectTrain={setSelectedTrainId}
             calm
+            stale={stale}
           />
           <aside className="public-board-preview" aria-label="Map details">
             <div className="board-preview-heading">
@@ -463,6 +464,7 @@ function StationPage({
           selectedStationId={stationId}
           onSelectStation={(id) => onNavigate(`/stations/${id}`)}
           calm
+          stale={stale}
         />
       </section>
     </main>
@@ -521,7 +523,7 @@ export function PassengerApp() {
       )}
       <footer className="passenger-footer">
         <TransitBrand />
-        <p>Routes, station access and arrival times for Aspireland.</p>
+        <p>Routes, station access and arrival times for Aspireland. <a className="font-license-link" href={interLicense} rel="license">Inter font license</a></p>
       </footer>
     </div>
   );

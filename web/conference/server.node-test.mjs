@@ -96,9 +96,10 @@ async function fixture(t, options = {}) {
     "assets/app.js": 'document.documentElement.dataset.site="passenger";',
     "assets/style.css": "body{color:purple}",
     "assets/font.woff2": "font",
+    "assets/inter-OFL-fixture.txt": "SIL OPEN FONT LICENSE Version 1.1",
     "favicon.svg": "<svg xmlns=\"http://www.w3.org/2000/svg\"/>",
   };
-  await Promise.all(Object.entries({ ...files, "operations.html": secret, ".env": secret, "assets/unlisted.js": secret, "assets/app.js.map": secret })
+  await Promise.all(Object.entries({ ...files, "operations.html": secret, ".env": secret, "assets/unlisted.js": secret, "assets/app.js.map": secret, "assets/inter-OFL-unlisted.txt": secret, "assets/private.txt": secret })
     .map(([name, value]) => writeFile(path.join(distDir, name), value)));
   await writeFile(path.join(distDir, "passenger-build.json"), JSON.stringify({
     kind: "passenger-attendee-v1",
@@ -164,7 +165,7 @@ test("configuration requires an explicit numeric loopback HTTP upstream and vali
 
 test("serves only sealed passenger assets and intentional known station SPA routes", async (t) => {
   const f = await fixture(t);
-  for (const target of ["/", "/index.html", "/stations/university", "/stations/airport/", "/assets/app.js", "/assets/style.css", "/assets/font.woff2", "/favicon.svg"]) {
+  for (const target of ["/", "/index.html", "/stations/university", "/stations/airport/", "/assets/app.js", "/assets/style.css", "/assets/font.woff2", "/assets/inter-OFL-fixture.txt", "/favicon.svg"]) {
     const response = await rawRequest(f.origin, target);
     assert.equal(response.status, 200, target);
     assert.ok(!response.text.includes(secret));
@@ -174,6 +175,9 @@ test("serves only sealed passenger assets and intentional known station SPA rout
   const head = await rawRequest(f.origin, "/assets/app.js", { method: "HEAD" });
   assert.equal(head.status, 200);
   assert.equal(head.text, "");
+  const license = await rawRequest(f.origin, "/assets/inter-OFL-fixture.txt");
+  assert.equal(license.headers["content-type"], "text/plain; charset=utf-8");
+  assert.match(license.text, /SIL OPEN FONT LICENSE/);
   const html = await rawRequest(f.origin, "/");
   assert.match(html.headers["content-security-policy"], /frame-ancestors 'none'/);
   assert.match(html.headers["permissions-policy"], /microphone=\(\)/);
@@ -184,7 +188,7 @@ test("denies development, operator, unknown, unlisted, encoded and traversal URL
   for (const target of [
     "/operations", "/operations.html", "/dispatch", "/dashboard", "/@vite/client", "/@fs/etc/passwd",
     "/src/main.tsx", "/node_modules/react/index.js", "/.env", "/package.json", "/passenger-build.json",
-    "/assets/unlisted.js", "/assets/app.js.map", "/api/analytics", "/api/world?raw=true",
+    "/assets/unlisted.js", "/assets/app.js.map", "/assets/inter-OFL-unlisted.txt", "/assets/private.txt", "/api/analytics", "/api/world?raw=true",
     "/api/world/", "/unknown", "/stations/unknown", "/stations/university/more", "//api/world",
     "/../.env", "/assets/../.env", "/%2e%2e/.env", "/assets%2fapp.js", "/assets\\app.js",
     "/%252e%252e/.env", "http://example.com/api/world",
