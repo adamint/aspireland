@@ -4,7 +4,8 @@ namespace MetroOps.ServiceDefaults;
 
 public sealed class RuntimeHealth : IHealthCheck
 {
-    public bool Ready { get; set; }
+    private volatile bool ready;
+    public bool Ready { get => ready; set => ready = value; }
     public string? Error { get; set; }
 
     public Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default) =>

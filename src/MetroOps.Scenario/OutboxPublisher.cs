@@ -1,14 +1,32 @@
 using System.Text.Json;
 using MetroOps.Contracts;
+using MetroOps.ServiceDefaults;
+using MetroOps.Simulation.Persistence;
 using Npgsql;
 using RabbitMQ.Client;
+using RabbitMQ.Client.Exceptions;
 
 namespace MetroOps.Scenario;
 
-public sealed class OutboxPublisher(NpgsqlDataSource dataSource, IServiceProvider services, ILogger<OutboxPublisher> logger) : BackgroundService
+public sealed class OutboxPublisher(NpgsqlDataSource dataSource, IServiceProvider services, RuntimeHealth health, ILogger<OutboxPublisher> logger) : BackgroundService
 {
+    internal static async Task<bool> PublishPending(SnapshotOutbox outbox,
+        Func<ProjectionEnvelope, CancellationToken, Task> publishConfirmed, CancellationToken ct)
+    {
+        if (await outbox.ReadPending(ct) is not { } pending) return false;
+        // A newer checkpoint can replace the slot while this publication waits for confirmation.
+        await publishConfirmed(pending, ct);
+        await outbox.Confirm(pending.Sequence, ct);
+        return true;
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        while (!health.Ready)
+            await Task.Delay(150, stoppingToken);
+
+        var outbox = new SnapshotOutbox(dataSource);
+        var failures = new FailureLog();
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -18,30 +36,22 @@ public sealed class OutboxPublisher(NpgsqlDataSource dataSource, IServiceProvide
                 await channel.ExchangeDeclareAsync("metro.world", ExchangeType.Fanout, durable: true, cancellationToken: stoppingToken);
                 while (!stoppingToken.IsCancellationRequested)
                 {
-                    await using var connection = await dataSource.OpenConnectionAsync(stoppingToken);
-                    await using var transaction = await connection.BeginTransactionAsync(stoppingToken);
-                    await using var query = new NpgsqlCommand("SELECT sequence,event_id,body::text FROM metro_outbox WHERE NOT published ORDER BY sequence DESC LIMIT 1 FOR UPDATE SKIP LOCKED", connection, transaction);
-                    var pending = new List<(long Sequence, string Id, string State)>();
-                    await using (var reader = await query.ExecuteReaderAsync(stoppingToken))
-                        while (await reader.ReadAsync(stoppingToken))
-                            pending.Add((reader.GetInt64(0), reader.GetString(1), reader.GetString(2)));
-                    foreach (var row in pending)
+                    var sent = await PublishPending(outbox, async (envelope, ct) =>
                     {
-                        var world = JsonSerializer.Deserialize<WorldState>(row.State, Wire.Json)!;
-                        var body = new ProjectionEnvelope(row.Sequence, row.Id, world.ScenarioId, world.Generation, world.Version, world.SimTime, world);
-                        var properties = new BasicProperties { MessageId = row.Id, ContentType = "application/json", Persistent = true };
-                        await channel.BasicPublishAsync("metro.world", "", false, properties, JsonSerializer.SerializeToUtf8Bytes(body, Wire.Json), stoppingToken);
-                        await using var update = new NpgsqlCommand("DELETE FROM metro_outbox WHERE sequence<=@id", connection, transaction);
-                        update.Parameters.AddWithValue("id", row.Sequence);
-                        await update.ExecuteNonQueryAsync(stoppingToken);
-                    }
-                    await transaction.CommitAsync(stoppingToken);
+                        var properties = new BasicProperties { MessageId = envelope.EventId, ContentType = "application/json", Persistent = true };
+                        await channel.BasicPublishAsync("metro.world", "", false, properties, JsonSerializer.SerializeToUtf8Bytes(envelope, Wire.Json), ct);
+                    }, stoppingToken);
+                    if (sent) failures.Recover(() => logger.LogInformation("Passenger snapshot publication recovered"));
                     await Task.Delay(150, stoppingToken);
                 }
             }
             catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
             {
-                logger.LogError(ex, "Domain event publisher disconnected; durable outbox retained");
+                var reason = ex is OperationInterruptedException { ShutdownReason: { } shutdown }
+                    ? System.Text.RegularExpressions.Regex.Replace(shutdown.ReplyText, @"\b\d+\b", "#")
+                    : ex.GetBaseException().Message;
+                failures.Report($"{ex.GetType()}:{reason}", () =>
+                    logger.LogError(ex, "Passenger snapshot publication failed; latest update remains pending"));
                 await Task.Delay(2000, stoppingToken);
             }
         }

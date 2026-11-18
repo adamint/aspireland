@@ -41,7 +41,7 @@ public sealed record TrainControlView(string ScenarioId, int Generation, DateTim
     bool Paused, TrainState Train, MovementGrant? Grant);
 
 public sealed record ProjectionEnvelope(long Sequence, string EventId, string ScenarioId, int Generation,
-    long Version, DateTimeOffset SimTime, WorldState World);
+    long Version, DateTimeOffset SimTime, RiderWorld World);
 
 public sealed class TrainState
 {

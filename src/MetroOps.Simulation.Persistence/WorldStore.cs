@@ -7,9 +7,13 @@ namespace MetroOps.Simulation.Persistence;
 
 public sealed class WorldStore(NpgsqlDataSource dataSource)
 {
+    private const int CheckpointHistoryLimit = 250;
+    private const int EventHistoryLimit = 10_000;
+
     public async Task Initialize(CancellationToken ct)
     {
         await using var connection = await dataSource.OpenConnectionAsync(ct);
+        await using var transaction = await connection.BeginTransactionAsync(ct);
         await using var command = new NpgsqlCommand("""
             CREATE TABLE IF NOT EXISTS metro_checkpoint (id integer PRIMARY KEY CHECK(id=1), state jsonb NOT NULL);
             CREATE TABLE IF NOT EXISTS metro_events (
@@ -26,9 +30,26 @@ public sealed class WorldStore(NpgsqlDataSource dataSource)
                 command_id text PRIMARY KEY, scenario_id text NOT NULL, generation integer NOT NULL,
                 body jsonb NOT NULL, result jsonb NOT NULL, recorded_at timestamptz NOT NULL DEFAULT now());
             INSERT INTO metro_checkpoint(id,state) VALUES(1,@state::jsonb) ON CONFLICT DO NOTHING;
-            """, connection);
+            SELECT NOT EXISTS (
+                SELECT FROM pg_attribute
+                WHERE attrelid='metro_outbox'::regclass AND attname='slot' AND NOT attisdropped);
+            """, connection, transaction);
         command.Parameters.AddWithValue("state", JsonSerializer.Serialize(Kernel.Create(), Wire.Json));
-        await command.ExecuteNonQueryAsync(ct);
+        if ((bool)(await command.ExecuteScalarAsync(ct))!)
+        {
+            // Legacy rows are snapshots, not events. Rebuild the slot from the checkpoint, not the queue.
+            await using var migrate = new NpgsqlCommand("""
+                ALTER TABLE metro_outbox ADD COLUMN slot integer CHECK (slot=1);
+                DELETE FROM metro_outbox;
+                ALTER TABLE metro_outbox ALTER COLUMN slot SET NOT NULL;
+                ALTER TABLE metro_outbox ADD UNIQUE (slot);
+                """, connection, transaction);
+            await migrate.ExecuteNonQueryAsync(ct);
+            var world = await ReadForUpdate(connection, transaction, ct);
+            await TrimEventHistory(connection, transaction, ct);
+            await Save(world, connection, transaction, ct);
+        }
+        await transaction.CommitAsync(ct);
     }
 
     public async Task<WorldState> Read(CancellationToken ct)
@@ -70,36 +91,12 @@ public sealed class WorldStore(NpgsqlDataSource dataSource)
         return reader.IsDBNull(0) ? null : JsonSerializer.Deserialize<TrainControlView>(reader.GetString(0), Wire.Json)!;
     }
 
-    public Task<T> Mutate<T>(Func<WorldState, T> transition, CancellationToken ct, CommandEnvelope? envelope = null) =>
-        MutateCore(transition, ct, envelope, activeInventory: false);
-
-    public Task<T> MutateActive<T>(Func<WorldState, T> transition, CancellationToken ct, CommandEnvelope? envelope = null) =>
-        MutateCore(transition, ct, envelope, activeInventory: true);
-
-    private async Task<T> MutateCore<T>(Func<WorldState, T> transition, CancellationToken ct, CommandEnvelope? envelope, bool activeInventory)
+    public async Task<T> Mutate<T>(Func<WorldState, T> transition, CancellationToken ct, CommandEnvelope? envelope = null)
     {
         await using var connection = await dataSource.OpenConnectionAsync(ct);
         await using var transaction = await connection.BeginTransactionAsync(ct);
-        await using var query = new NpgsqlCommand(activeInventory ? """
-            SELECT (state-'cohorts')::text,
-                COALESCE((
-                    SELECT jsonb_agg(value ORDER BY ordinal)
-                    FROM jsonb_array_elements(state->'cohorts') WITH ORDINALITY AS cohort(value,ordinal)
-                    WHERE COALESCE(value->>'state','') NOT IN ('completed','abandoned')
-                ),'[]'::jsonb)::text
-            FROM metro_checkpoint WHERE id=1 FOR UPDATE
-            """ : "SELECT state::text,NULL::text FROM metro_checkpoint WHERE id=1 FOR UPDATE", connection, transaction);
-        WorldState world;
-        await using (var reader = await query.ExecuteReaderAsync(ct))
-        {
-            if (!await reader.ReadAsync(ct))
-                throw new InvalidOperationException("No authoritative checkpoint is available.");
-            world = JsonSerializer.Deserialize<WorldState>(reader.GetString(0), Wire.Json)!;
-            if (activeInventory)
-                world.Cohorts = JsonSerializer.Deserialize<List<Cohort>>(reader.GetString(1), Wire.Json)!;
-        }
-        var scenarioId = world.ScenarioId;
-        var generation = world.Generation;
+        var world = await ReadForUpdate(connection, transaction, ct);
+        DropTerminalCohorts(world);
         if (envelope is not null)
         {
             await using var existing = new NpgsqlCommand("SELECT result::text,body::text FROM metro_commands WHERE command_id=@id", connection, transaction);
@@ -123,7 +120,8 @@ public sealed class WorldStore(NpgsqlDataSource dataSource)
         world.UpdatedAt = DateTimeOffset.UtcNow;
         if (result is CommandResult outcome)
             result = (T)(object)(outcome with { Version = world.Version });
-        foreach (var ev in world.History.Where(e => !historyIds.Contains(e.Id)))
+        var events = world.History.Where(e => !historyIds.Contains(e.Id)).ToList();
+        foreach (var ev in events)
         {
             ev.Version = world.Version;
             ev.ScenarioId = world.ScenarioId;
@@ -140,28 +138,8 @@ public sealed class WorldStore(NpgsqlDataSource dataSource)
             record.Parameters.AddWithValue("body", JsonSerializer.Serialize(ev, Wire.Json));
             await record.ExecuteNonQueryAsync(ct);
         }
-        if (world.History.Count > 250) world.History.RemoveRange(0, world.History.Count - 250);
-        var state = JsonSerializer.Serialize(world, Wire.Json);
-        await using var save = new NpgsqlCommand("""
-            WITH incoming AS MATERIALIZED (SELECT @state::jsonb AS state),
-            saved AS (
-                UPDATE metro_checkpoint SET state=CASE WHEN @preserveRetired THEN
-                    jsonb_set(incoming.state,'{cohorts}',COALESCE((
-                        SELECT jsonb_agg(value ORDER BY ordinal)
-                        FROM jsonb_array_elements(metro_checkpoint.state->'cohorts')
-                            WITH ORDINALITY AS cohort(value,ordinal)
-                        WHERE value->>'state' IN ('completed','abandoned')
-                    ),'[]'::jsonb)||(incoming.state->'cohorts'))
-                    ELSE incoming.state END
-                FROM incoming WHERE metro_checkpoint.id=1
-                RETURNING metro_checkpoint.state
-            )
-            INSERT INTO metro_outbox(event_id,body) SELECT @event,state FROM saved;
-            """, connection, transaction);
-        save.Parameters.AddWithValue("state", state);
-        save.Parameters.AddWithValue("preserveRetired", activeInventory && world.ScenarioId == scenarioId && world.Generation == generation);
-        save.Parameters.AddWithValue("event", Guid.NewGuid().ToString("N"));
-        await save.ExecuteNonQueryAsync(ct);
+        if (events.Count > 0) await TrimEventHistory(connection, transaction, ct);
+        await Save(world, connection, transaction, ct);
         if (envelope is not null)
         {
             await using var record = new NpgsqlCommand("""
@@ -177,6 +155,44 @@ public sealed class WorldStore(NpgsqlDataSource dataSource)
         }
         await transaction.CommitAsync(ct);
         return result;
+    }
+
+    private static async Task<WorldState> ReadForUpdate(NpgsqlConnection connection, NpgsqlTransaction transaction, CancellationToken ct)
+    {
+        await using var query = new NpgsqlCommand("SELECT state::text FROM metro_checkpoint WHERE id=1 FOR UPDATE", connection, transaction);
+        var state = await query.ExecuteScalarAsync(ct) as string
+            ?? throw new InvalidOperationException("No authoritative checkpoint is available.");
+        return JsonSerializer.Deserialize<WorldState>(state, Wire.Json)!;
+    }
+
+    // Completion and abandonment already update the cumulative counters; completed round trips schedule returns immediately.
+    private static void DropTerminalCohorts(WorldState world) =>
+        world.Cohorts.RemoveAll(c => c.State is "completed" or "abandoned");
+
+    private static async Task Save(WorldState world, NpgsqlConnection connection, NpgsqlTransaction transaction, CancellationToken ct)
+    {
+        DropTerminalCohorts(world);
+        if (world.History.Count > CheckpointHistoryLimit)
+            world.History.RemoveRange(0, world.History.Count - CheckpointHistoryLimit);
+        await using var save = new NpgsqlCommand("""
+            UPDATE metro_checkpoint SET state=@state::jsonb WHERE id=1;
+            INSERT INTO metro_outbox(slot,event_id,body) VALUES(1,@event,@rider::jsonb)
+            ON CONFLICT(slot) DO UPDATE SET sequence=EXCLUDED.sequence,event_id=EXCLUDED.event_id,body=EXCLUDED.body;
+            """, connection, transaction);
+        save.Parameters.AddWithValue("state", JsonSerializer.Serialize(world, Wire.Json));
+        save.Parameters.AddWithValue("rider", JsonSerializer.Serialize(Kernel.ProjectRiders(world), Wire.Json));
+        save.Parameters.AddWithValue("event", Guid.NewGuid().ToString("N"));
+        await save.ExecuteNonQueryAsync(ct);
+    }
+
+    private static async Task TrimEventHistory(NpgsqlConnection connection, NpgsqlTransaction transaction, CancellationToken ct)
+    {
+        await using var trim = new NpgsqlCommand("""
+            DELETE FROM metro_events WHERE sequence < (
+                SELECT sequence FROM metro_events ORDER BY sequence DESC OFFSET @offset LIMIT 1);
+            """, connection, transaction);
+        trim.Parameters.AddWithValue("offset", EventHistoryLimit - 1);
+        await trim.ExecuteNonQueryAsync(ct);
     }
 
     public async Task<IReadOnlyList<HistoryEvent>> Events(long after, CancellationToken ct)

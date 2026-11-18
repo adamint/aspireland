@@ -1,7 +1,17 @@
 using MetroOps.Contracts;
 using MetroOps.Domain;
+using MetroOps.Information;
+using MetroOps.Scenario;
+using MetroOps.ServiceDefaults;
 using MetroOps.Simulation.Persistence;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
+using RabbitMQ.Client;
+using StackExchange.Redis;
+using System.Net;
+using System.Net.Http.Json;
 using System.Text.Json;
 
 namespace MetroOps.Runtime.Tests;
@@ -27,7 +37,7 @@ public sealed class PersistenceTests
     }
 
     [PersistenceFact]
-    public async Task Active_inventory_transition_preserves_retired_records_and_atomic_publication()
+    public async Task Transitions_preserve_terminal_totals_and_active_inventory_without_retired_rows()
     {
         await using var dataSource = TestDataSource();
         var store = new WorldStore(dataSource);
@@ -50,7 +60,7 @@ public sealed class PersistenceTests
         }, default);
         var before = await store.Read(default);
 
-        await store.MutateActive(world =>
+        await store.Mutate(world =>
         {
             Assert.DoesNotContain(world.Cohorts, c => c.State is "completed" or "abandoned");
             Assert.Contains(world.Cohorts, c => c.Id == "unknown");
@@ -59,7 +69,7 @@ public sealed class PersistenceTests
             Kernel.Tick(world, [], 1);
             return true;
         }, default);
-        await store.MutateActive(world =>
+        await store.Mutate(world =>
         {
             Assert.DoesNotContain(world.Cohorts, c => c.Id == "expires");
             Kernel.Tick(world, [], 1);
@@ -67,20 +77,20 @@ public sealed class PersistenceTests
         }, default);
 
         var after = await store.Read(default);
-        Assert.Equal(22, after.Cohorts.Sum(c => c.Count));
-        Assert.Equal(after.Metrics.Generated, after.Cohorts.Sum(c => c.Count));
+        Assert.Equal(13, after.Cohorts.Sum(c => c.Count));
+        Assert.Equal(22, after.Metrics.Generated);
+        Assert.Equal(5, after.Metrics.Completed);
+        Assert.Equal(4, after.Metrics.Abandoned);
         Assert.Equal(before.SimTime.AddSeconds(2), after.SimTime);
-        Assert.Equal("abandoned", Assert.Single(after.Cohorts, c => c.Id == "expires").State);
-        foreach (var id in new[] { "completed", "abandoned" })
-            Assert.Equal(JsonSerializer.Serialize(before.Cohorts.Single(c => c.Id == id), Wire.Json),
-                JsonSerializer.Serialize(after.Cohorts.Single(c => c.Id == id), Wire.Json));
+        Assert.DoesNotContain(after.Cohorts, c => c.State is "completed" or "abandoned");
+        Assert.Contains(after.Cohorts, c => c.Id == "future");
         await using var publication = dataSource.CreateCommand("""
-            SELECT state=(SELECT body FROM metro_outbox ORDER BY sequence DESC LIMIT 1)
+            SELECT state->>'version'=(SELECT body->>'version' FROM metro_outbox)
             FROM metro_checkpoint WHERE id=1
             """);
         Assert.True((bool)(await publication.ExecuteScalarAsync())!);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => store.MutateActive<bool>(world =>
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.Mutate<bool>(world =>
         {
             world.Cohorts.Clear();
             throw new InvalidOperationException("Abort this transition.");
@@ -130,7 +140,7 @@ public sealed class PersistenceTests
                     expected.SimTime, 1800, expected.SimTime.AddHours(1))
             ];
             Kernel.Tick(expected, demand, 20, driveTrains: true);
-            await store.MutateActive(world =>
+            await store.Mutate(world =>
             {
                 Kernel.Tick(world, demand, 20, driveTrains: true);
                 return true;
@@ -140,20 +150,200 @@ public sealed class PersistenceTests
             expected.UpdatedAt = actual.UpdatedAt;
             var expectedView = Wire.Clone(expected);
             var actualView = Wire.Clone(actual);
+            expectedView.Cohorts.RemoveAll(c => c.State is "completed" or "abandoned");
+            if (expectedView.History.Count > 250)
+                expectedView.History.RemoveRange(0, expectedView.History.Count - 250);
             expectedView.Cohorts.Sort((a, b) => StringComparer.Ordinal.Compare(a.Id, b.Id));
             actualView.Cohorts.Sort((a, b) => StringComparer.Ordinal.Compare(a.Id, b.Id));
             Assert.True(JsonElement.DeepEquals(JsonSerializer.SerializeToElement(expectedView, Wire.Json),
                 JsonSerializer.SerializeToElement(actualView, Wire.Json)), $"Inventory differed after step {step}.");
-            Assert.Equal(actual.Metrics.Generated, actual.Cohorts.Sum(c => c.Count));
+            Assert.Equal(actual.Metrics.Generated, actual.Metrics.Completed + actual.Metrics.Abandoned + actual.Cohorts.Sum(c => c.Count));
             Assert.Equal(original.ScenarioId, actual.ScenarioId);
             Assert.Equal(original.Generation, actual.Generation);
             Assert.Equal(Fleet.Trains.Count, actual.Trains.Count);
             await using var publication = dataSource.CreateCommand("""
-                SELECT state=(SELECT body FROM metro_outbox ORDER BY sequence DESC LIMIT 1)
+                SELECT state->>'version'=(SELECT body->>'version' FROM metro_outbox)
                 FROM metro_checkpoint WHERE id=1
                 """);
             Assert.True((bool)(await publication.ExecuteScalarAsync())!);
         }
+    }
+
+    [PersistenceFact]
+    public async Task Unavailable_publisher_cannot_grow_pending_snapshots()
+    {
+        await using var dataSource = TestDataSource();
+        var store = new WorldStore(dataSource);
+        await store.Initialize(default);
+        await Task.WhenAll(Enumerable.Range(0, 20).Select(_ => store.Mutate(world => world.SimTime = world.SimTime.AddSeconds(1), default)));
+        var world = await store.Read(default);
+        await using var query = dataSource.CreateCommand("SELECT count(*), max((body->>'version')::bigint) FROM metro_outbox");
+        await using var reader = await query.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(1, reader.GetInt64(0));
+        Assert.Equal(world.Version, reader.GetInt64(1));
+        Assert.Equal(20, world.Version);
+    }
+
+    [PersistenceFact]
+    public async Task Late_confirmation_does_not_remove_newer_snapshot_or_block_writers()
+    {
+        await using var dataSource = TestDataSource();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var ct = timeout.Token;
+        var store = new WorldStore(dataSource);
+        await store.Initialize(ct);
+        var initial = await store.Read(ct);
+        var outbox = new SnapshotOutbox(dataSource);
+        var inFlight = new TaskCompletionSource<ProjectionEnvelope>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var confirm = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var publishing = OutboxPublisher.PublishPending(outbox, (snapshot, token) =>
+        {
+            inFlight.SetResult(snapshot);
+            return confirm.Task.WaitAsync(token);
+        }, ct);
+        Assert.Equal(initial.Version, (await inFlight.Task.WaitAsync(ct)).Version);
+        await store.Mutate(w => w.SimTime = w.SimTime.AddMinutes(1), ct);
+        var newer = await store.Read(ct);
+        confirm.SetResult();
+        await publishing;
+        Assert.Equal(newer.Version, (await outbox.ReadPending(ct))?.Version);
+
+        await Assert.ThrowsAsync<IOException>(() => OutboxPublisher.PublishPending(outbox,
+            (_, _) => throw new IOException("Broker unavailable"), ct));
+        Assert.Equal(newer.Version, (await outbox.ReadPending(ct))?.Version);
+
+        await OutboxPublisher.PublishPending(outbox, (snapshot, _) =>
+        {
+            Assert.Equal(newer.Version, snapshot.Version);
+            return Task.CompletedTask;
+        }, ct);
+        Assert.Null(await outbox.ReadPending(ct));
+    }
+
+    [PublicationFact]
+    public async Task Publisher_and_information_deliver_the_newest_snapshot_and_restore_freshness()
+    {
+        await using var dataSource = TestDataSource();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var ct = timeout.Token;
+        var store = new WorldStore(dataSource);
+        await store.Initialize(ct);
+        var bootstrap = await store.Read(ct);
+        bootstrap.UpdatedAt -= TimeSpan.FromMinutes(1);
+        var factory = new ConnectionFactory
+        {
+            HostName = "127.0.0.1",
+            Port = int.Parse(Environment.GetEnvironmentVariable("METROOPS_TEST_BROKER_PORT")!)
+        };
+        await using var receiving = await factory.CreateConnectionAsync(ct);
+        await using var sending = await factory.CreateConnectionAsync(ct);
+        await using var redis = await ConnectionMultiplexer.ConnectAsync($"127.0.0.1:{Environment.GetEnvironmentVariable("METROOPS_TEST_REDIS_PORT")}");
+        await using var scenario = new ServiceCollection().AddSingleton(sending).BuildServiceProvider();
+        await using var information = new ServiceCollection().AddSingleton(receiving).AddSingleton<IConnectionMultiplexer>(redis).BuildServiceProvider();
+        using var client = new HttpClient(new ScenarioBootstrap(bootstrap));
+        using var subscriber = new InformationProjection(information, new ServiceClients(new BootstrapClientFactory(client)),
+            NullLogger<InformationProjection>.Instance);
+        using var publisher = new OutboxPublisher(dataSource, scenario, new RuntimeHealth { Ready = true }, NullLogger<OutboxPublisher>.Instance);
+        await subscriber.StartAsync(ct);
+        try
+        {
+            while (subscriber.Latest is null) await Task.Delay(25, ct);
+            Assert.Equal(HealthStatus.Unhealthy, (await subscriber.CheckHealthAsync(new(), ct)).Status);
+
+            await store.Mutate(world => world.SimTime = world.SimTime.AddMinutes(1), ct);
+            var expected = await store.Read(ct);
+            await publisher.StartAsync(ct);
+            while (subscriber.Latest?.Version != expected.Version || await new SnapshotOutbox(dataSource).ReadPending(ct) is not null)
+                await Task.Delay(25, ct);
+            Assert.Equal(HealthStatus.Healthy, (await subscriber.CheckHealthAsync(new(), ct)).Status);
+            var payload = (string?)await redis.GetDatabase().StringGetAsync("metro:public-world");
+            Assert.Equal(expected.Version, JsonSerializer.Deserialize<RiderWorld>(payload!, Wire.Json)!.Version);
+        }
+        finally
+        {
+            await publisher.StopAsync(CancellationToken.None);
+            await subscriber.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [PersistenceFact]
+    public async Task Legacy_mature_checkpoint_and_backlog_migrate_without_resetting_world_or_command_receipts()
+    {
+        await using var dataSource = TestDataSource();
+        var store = new WorldStore(dataSource);
+        var world = Kernel.Create();
+        world.Generation = 10;
+        world.Version = 57_214;
+        world.SimTime = world.SimTime.AddHours(11);
+        world.Cohorts = Enumerable.Range(0, 21_509).Select(i => new Cohort
+        {
+            Id = $"retired:{i}", Count = 2,
+            State = i % 2 == 0 ? "completed" : "abandoned",
+            Legs = [new() { From = new string('x', 500) }]
+        }).ToList();
+        world.Cohorts.Add(new() { Id = "future", ReadyAt = world.SimTime.AddHours(1), Count = 5 });
+        world.Metrics = new() { Generated = 43_023, Completed = 21_510, Abandoned = 21_508 };
+        world.History = Enumerable.Range(1, 260).Select(i => new HistoryEvent { Id = $"checkpoint:{i}" }).ToList();
+        var envelope = new CommandEnvelope("retain-command", world.ScenarioId, 10, null, "operator", "test",
+            new("hold-train", "blue-1"));
+        var prior = new CommandResult(true, "applied", "Recorded.", world.Version);
+        await using (var seed = dataSource.CreateCommand("""
+            CREATE TABLE metro_checkpoint (id integer PRIMARY KEY CHECK(id=1), state jsonb NOT NULL);
+            CREATE TABLE metro_outbox (sequence bigserial PRIMARY KEY, event_id text NOT NULL UNIQUE,
+                body jsonb NOT NULL, published boolean NOT NULL DEFAULT false);
+            CREATE TABLE metro_events (sequence bigserial PRIMARY KEY, event_id text NOT NULL UNIQUE,
+                scenario_id text NOT NULL, generation integer NOT NULL, version bigint NOT NULL, sim_time timestamptz NOT NULL, body jsonb NOT NULL);
+            CREATE TABLE metro_commands (command_id text PRIMARY KEY, scenario_id text NOT NULL,
+                generation integer NOT NULL, body jsonb NOT NULL, result jsonb NOT NULL, recorded_at timestamptz NOT NULL DEFAULT now());
+            INSERT INTO metro_checkpoint VALUES (1,@state::jsonb);
+            INSERT INTO metro_outbox(event_id,body) SELECT 'old:'||n,@state::jsonb FROM generate_series(1,3) AS n;
+            INSERT INTO metro_events(event_id,scenario_id,generation,version,sim_time,body)
+              SELECT 'event:'||n,'legacy',CASE WHEN n<6000 THEN 9 ELSE 10 END,n,now(),'{}'
+              FROM generate_series(1,10005) AS n ORDER BY n;
+            INSERT INTO metro_commands(command_id,scenario_id,generation,body,result)
+              VALUES (@id,'legacy',10,@command::jsonb,@result::jsonb);
+            """))
+        {
+            seed.Parameters.AddWithValue("state", JsonSerializer.Serialize(world, Wire.Json));
+            seed.Parameters.AddWithValue("id", envelope.CommandId);
+            seed.Parameters.AddWithValue("command", JsonSerializer.Serialize(envelope, Wire.Json));
+            seed.Parameters.AddWithValue("result", JsonSerializer.Serialize(prior, Wire.Json));
+            await seed.ExecuteNonQueryAsync();
+        }
+
+        await store.Initialize(default);
+        var after = await store.Read(default);
+        Assert.Equal(world.ScenarioId, after.ScenarioId);
+        Assert.Equal(world.Generation, after.Generation);
+        Assert.Equal(world.Version, after.Version);
+        Assert.Equal(world.SimTime, after.SimTime);
+        Assert.Equal(world.UpdatedAt, after.UpdatedAt);
+        Assert.Equal(world.Metrics.Completed, after.Metrics.Completed);
+        Assert.Equal(world.Metrics.Abandoned, after.Metrics.Abandoned);
+        Assert.Equal("future", Assert.Single(after.Cohorts).Id);
+        Assert.Equal(250, after.History.Count);
+        Assert.Equal("checkpoint:11", after.History[0].Id);
+        Assert.Equal(prior, await store.Mutate<CommandResult>(_ => throw new InvalidOperationException("Replayed command ran again"), default, envelope));
+
+        await store.Mutate(current =>
+        {
+            current.History.Add(new() { Kind = "new", SimTime = current.SimTime });
+            return true;
+        }, default);
+        await store.Initialize(default);
+        await using var query = dataSource.CreateCommand("""
+            SELECT count(*), min(sequence), count(DISTINCT generation),
+                (SELECT count(*) FROM metro_outbox), (SELECT max((body->>'version')::bigint) FROM metro_outbox)
+            FROM metro_events
+            """);
+        await using var reader = await query.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(10_000, reader.GetInt64(0));
+        Assert.Equal(7, reader.GetInt64(1));
+        Assert.Equal(2, reader.GetInt64(2));
+        Assert.Equal(1, reader.GetInt64(3));
+        Assert.Equal(world.Version + 1, reader.GetInt64(4));
     }
 
     [PersistenceFact]
@@ -186,7 +376,29 @@ public sealed class PersistenceTests
         var connection = new NpgsqlConnectionStringBuilder(Environment.GetEnvironmentVariable("METROOPS_TEST_POSTGRES"));
         if (connection.Database?.StartsWith("metroops_test_", StringComparison.Ordinal) != true)
             throw new InvalidOperationException("Persistence checks require a separate metroops_test_* database.");
+        var schema = $"test_{Guid.NewGuid():N}";
+        using (var bootstrap = NpgsqlDataSource.Create(connection.ConnectionString))
+        using (var create = bootstrap.CreateCommand($"CREATE SCHEMA {schema}"))
+            create.ExecuteNonQuery();
+        connection.SearchPath = schema;
         return NpgsqlDataSource.Create(connection.ConnectionString);
+    }
+
+    private sealed class BootstrapClientFactory(HttpClient client) : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => client;
+    }
+
+    private sealed class ScenarioBootstrap(WorldState world) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            Assert.Equal("/rider-state", request.RequestUri?.AbsolutePath);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(Kernel.ProjectRiders(world), options: Wire.Json)
+            });
+        }
     }
 }
 
@@ -196,5 +408,15 @@ public sealed class PersistenceFactAttribute : FactAttribute
     {
         if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("METROOPS_TEST_POSTGRES")))
             Skip = "Set METROOPS_TEST_POSTGRES to a disposable metroops_test_* PostgreSQL database.";
+    }
+}
+
+public sealed class PublicationFactAttribute : FactAttribute
+{
+    public PublicationFactAttribute()
+    {
+        if (new[] { "METROOPS_TEST_POSTGRES", "METROOPS_TEST_BROKER_PORT", "METROOPS_TEST_REDIS_PORT" }
+            .Any(name => string.IsNullOrEmpty(Environment.GetEnvironmentVariable(name))))
+            Skip = "Set the PostgreSQL fixture and dedicated loopback RabbitMQ and Redis test ports.";
     }
 }

@@ -27,14 +27,14 @@ public static class ControlRoutes
         app.MapPost("/register", async (TrainRegistration request, HttpContext context, WorldStore store, IConfiguration config, CancellationToken ct) =>
             !ServiceKey.Matches(context, config, "WORKER_KEY")
                 ? Results.Unauthorized()
-                : Results.Ok(await store.MutateActive(w => Kernel.Register(w, request), ct)));
+                : Results.Ok(await store.Mutate(w => Kernel.Register(w, request), ct)));
         app.MapPost("/movement", async (MovementRequest request, HttpContext context, WorldStore store, IConfiguration config, CancellationToken ct) =>
             !ServiceKey.Matches(context, config, "WORKER_KEY")
                 ? Results.Unauthorized()
-                : Results.Ok(await store.MutateActive(w => Kernel.RequestMovement(w, request), ct)));
+                : Results.Ok(await store.Mutate(w => Kernel.RequestMovement(w, request), ct)));
         app.MapPost("/confirm", async (MovementConfirmation request, HttpContext context, WorldStore store, IConfiguration config, CancellationToken ct) =>
             !ServiceKey.Matches(context, config, "WORKER_KEY")
                 ? Results.Unauthorized()
-                : Results.Ok(await store.MutateActive(w => Kernel.ConfirmMovement(w, request), ct)));
+                : Results.Ok(await store.Mutate(w => Kernel.ConfirmMovement(w, request), ct)));
     }
 }

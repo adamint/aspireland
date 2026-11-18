@@ -4,6 +4,8 @@ namespace MetroOps.Domain;
 
 public static partial class Kernel
 {
+    private const int MaxHeadwaySeconds = 3600;
+
     private static readonly HashSet<string> IncidentKinds =
     [
         "door-fault", "extended-dwell", "train-withdrawal", "elevator-outage", "circulation",
@@ -142,8 +144,8 @@ public static partial class Kernel
         {
             return Rejected(world, "Target line was not found.");
         }
-        if (action.Amount is not { } requested || !double.IsFinite(requested) || requested is < 120 or > 3600)
-            return Rejected(world, "Departure regulation floor must be between 120 and 3600 seconds.");
+        if (action.Amount is not { } requested || !double.IsFinite(requested) || requested is < 120 or > MaxHeadwaySeconds)
+            return Rejected(world, $"Departure regulation floor must be between 120 and {MaxHeadwaySeconds} seconds.");
         var fleet = world.Trains.Count(t => t.Line == action.Target && t.State is not "reserve" and not "withdrawn");
         if (fleet == 0) return Rejected(world, "Line has no active fleet.");
         world.Headways[action.Target] = requested;

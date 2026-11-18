@@ -11,6 +11,7 @@ public static class ScenarioRoutes
     public static void Map(WebApplication app)
     {
         app.MapGet("/state", (WorldStore store, CancellationToken ct) => store.Read(ct));
+        app.MapGet("/rider-state", async (WorldStore store, CancellationToken ct) => Kernel.ProjectRiders(await store.Read(ct)));
         app.MapGet("/analytics-state", async (WorldStore store, CancellationToken ct) => AnalyticsState(await store.Read(ct)));
         app.MapGet("/context", async (WorldStore store, CancellationToken ct) =>
         {

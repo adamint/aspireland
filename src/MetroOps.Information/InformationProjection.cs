@@ -1,5 +1,6 @@
 using System.Text.Json;
 using MetroOps.Contracts;
+using MetroOps.Domain;
 using MetroOps.ServiceDefaults;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using RabbitMQ.Client;
@@ -11,7 +12,6 @@ namespace MetroOps.Information;
 public sealed class InformationProjection(IServiceProvider services, ServiceClients clients, ILogger<InformationProjection> logger) : BackgroundService, IHealthCheck
 {
     private WorldState? latest;
-    private long sequence;
     private readonly SemaphoreSlim acceptGate = new(1, 1);
     private const string QueueName = "metro.information.snapshots-v2";
     public WorldState? Latest => Volatile.Read(ref latest);
@@ -23,6 +23,7 @@ public sealed class InformationProjection(IServiceProvider services, ServiceClie
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        var failures = new FailureLog();
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -46,11 +47,8 @@ public sealed class InformationProjection(IServiceProvider services, ServiceClie
                     {
                         var envelope = JsonSerializer.Deserialize<ProjectionEnvelope>(delivery.Body.Span, Wire.Json)
                             ?? throw new JsonException("Invalid world event.");
-                        if (envelope.Sequence > sequence)
-                        {
-                            await Accept(envelope.World, redis, stoppingToken);
-                            sequence = envelope.Sequence;
-                        }
+                        // The same envelope can still carry an old full-world delivery after a restart.
+                        await Accept(envelope.World, redis, stoppingToken, normalize: true);
                         await channel.BasicAckAsync(delivery.DeliveryTag, false, stoppingToken);
                     }
                     catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
@@ -60,29 +58,35 @@ public sealed class InformationProjection(IServiceProvider services, ServiceClie
                 };
                 await channel.BasicConsumeAsync(QueueName, false, consumer, stoppingToken);
                 // Subscribe before reading the authoritative checkpoint so events cannot be lost in the handoff.
-                await Accept(await clients.Get<WorldState>("scenario", "/state", stoppingToken), redis, stoppingToken);
-                while (broker.IsOpen && !stoppingToken.IsCancellationRequested)
+                await Accept(await clients.Get<RiderWorld>("scenario", "/rider-state", stoppingToken), redis, stoppingToken);
+                failures.Recover(() => logger.LogInformation("Passenger-information subscription recovered"));
+                while (channel.IsOpen && broker.IsOpen && !stoppingToken.IsCancellationRequested)
                 {
                     await Task.WhenAny(Task.Delay(1000, stoppingToken), consumerFailure.Task);
                     if (consumerFailure.Task.IsCompleted) await consumerFailure.Task;
                 }
+                if (!stoppingToken.IsCancellationRequested)
+                    throw new InvalidOperationException("The passenger snapshot channel or connection closed.");
             }
             catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
             {
-                logger.LogError(ex, "Passenger-information projection disconnected; existing boards will become visibly stale");
+                var reason = ex.GetBaseException();
+                failures.Report($"{reason.GetType()}:{reason.Message}", () =>
+                    logger.LogError(ex, "Passenger-information projection disconnected; existing boards will become visibly stale"));
                 await Task.Delay(2000, stoppingToken);
             }
         }
     }
 
-    private async Task Accept(WorldState world, IConnectionMultiplexer redis, CancellationToken ct)
+    private async Task Accept(RiderWorld world, IConnectionMultiplexer redis, CancellationToken ct, bool normalize = false)
     {
         await acceptGate.WaitAsync(ct);
         try
         {
             if (Latest is { } current && current.Version >= world.Version) return;
+            if (normalize) world = Kernel.ProjectRiders(world.ToWorldState());
             await redis.GetDatabase().StringSetAsync("metro:public-world", JsonSerializer.Serialize(world, Wire.Json), TimeSpan.FromMinutes(10));
-            Volatile.Write(ref latest, world);
+            Volatile.Write(ref latest, world.ToWorldState());
         }
         finally { acceptGate.Release(); }
     }

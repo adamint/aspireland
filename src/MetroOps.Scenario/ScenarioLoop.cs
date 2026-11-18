@@ -47,7 +47,7 @@ public sealed class ScenarioLoop(WorldStore store, ServiceClients clients, Runti
                 if (seconds < 1) continue;
                 var demand = await clients.Post<DemandResponse>("demand", "/demand",
                     new DemandRequest(snapshot.Seed, snapshot.StreamVersion, snapshot.Preset, snapshot.SimTime, snapshot.SimTime.AddSeconds(seconds)), stoppingToken);
-                var advanced = await store.MutateActive(world =>
+                var advanced = await store.Mutate(world =>
                 {
                     if (world.Paused || world.ScenarioId != snapshot.ScenarioId || world.SimTime != snapshot.SimTime) return false;
                     Kernel.Tick(world, demand.Cohorts, seconds);

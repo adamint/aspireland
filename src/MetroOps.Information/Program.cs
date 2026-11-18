@@ -2,7 +2,7 @@ using MetroOps.Information;
 using MetroOps.ServiceDefaults;
 
 var builder = WebApplication.CreateBuilder(args);
-builder.AddMetroDefaults();
+builder.AddMetroDefaults(logHealthTransitions: true);
 builder.AddRabbitMQClient("events", settings => settings.DisableAutoActivation = true);
 builder.AddRedisClient("cache", settings => settings.DisableAutoActivation = true);
 builder.Services.AddSingleton<InformationProjection>();
