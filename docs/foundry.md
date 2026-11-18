@@ -33,7 +33,7 @@ env MetroOps__ProvisionFoundry=true \
   "Azure__ResourceGroup=$AZURE_RESOURCE_GROUP" \
   "Azure__Location=$AZURE_REGION" \
   Azure__AllowResourceGroupCreation=false \
-  aspire start --isolated --non-interactive
+  dotnet aspire start --isolated --non-interactive
 ```
 
 Aspire passes these references to `ai-operations` only. It uses the official

@@ -11,7 +11,8 @@ provisioning anything.
 Inspected on November 17, 2026. The graph below reflects the completed wiring
 cleanup; the original request trace predates those changes.
 
-The [AppHost](apphost.cs) uses Aspire 13.6.5.
+The [AppHost](apphost.cs) now uses Aspire 17.0.0; the observations below
+also record earlier development work.
 Eight concrete deterministic executables own their routes and dependencies.
 The existing AI resource runs its own deployable project.
 
@@ -87,16 +88,19 @@ is a separate, later operation.
 ## 2. Keep the AppHost at the root
 
 `apphost.cs` and `apphost.run.json` now live together at the repository root.
-The single `aspire.config.json` selects that file and retains SDK 13.6.5.
+The single `aspire.config.json` selects that file and pins the Aspire SDK
+bundle to 17.0.0. The file-based AppHost references `Aspire.Hosting.AppHost`
+explicitly instead of using the obsolete `Aspire.AppHost.Sdk`.
 Resource paths are relative to the root; the resource names, user-secrets ID
 `aspireland-metroops-local` and named PostgreSQL volume are unchanged.
 Launch profiles do not open a browser automatically.
 The NuGet source configuration and useful Aspire VS Code recommendation moved
 to the root too; the obsolete AppHost directory is gone.
 
-Run `aspire start --apphost apphost.cs --isolated --non-interactive` from the
+Run `dotnet tool restore`, then
+`dotnet aspire start --apphost apphost.cs --isolated --non-interactive` from the
 root. When several apps are running, stop this one with
-`aspire stop --apphost apphost.cs --non-interactive`, never `--all`.
+`dotnet aspire stop --apphost apphost.cs --non-interactive`, never `--all`.
 
 The relocated app resumed the previous scenario,
 generation 10, from the same volume; its version advanced past 50718.
@@ -112,7 +116,11 @@ The release AppHost provisions nothing in Azure by default. With explicit
 opt-in it provisions a separate account using typed deployment APIs and gives
 only the AI host model references. See [Enable Foundry](docs/foundry.md).
 
-`AddAzureOpenAIClient` registers the official SDK client there.
+`AddAzureOpenAIClient` now registers `OpenAI.OpenAIClient` through
+`Aspire.Azure.AI.Extensions.OpenAI`, the Aspire 17 replacement for the
+discontinued Azure OpenAI integration. Requests use the SDK's `/openai/v1/`
+routes. The two optional Foundry-related integrations are release-train
+previews; [the package pins](README.md#run-it-locally) identify them explicitly.
 AzureCliCredential selects the configured tenant and
 the SDK refreshes tokens. The manual HTTP serializers, multipart construction,
 authentication headers and token cache were deleted. API input validation,
@@ -163,11 +171,11 @@ Python analytics still needs `SCENARIO_URL`; the Vite proxies need `API_URL`.
 Neither uses the C# discovery handler. The browser never receives an operator
 key; its same-origin development proxy supplies that header.
 
-Checking the pinned package mattered. `AddCSharpApp` in 13.6.5 still launched
-per-instance `dotnet run`, so merely renaming the API did not fix the shared
-MSBuild-cache race. The matching released `Aspire.Hosting.Dotnet`
-`13.6.5-preview.1.26559.7` supplies `AddDotnetProject` and its coordinated build.
-SDK pinning remains 13.6.5.
+Checking the pinned package mattered. The earlier `AddCSharpApp` registration
+launched per-instance `dotnet run`, so merely renaming the API did not fix the
+shared MSBuild-cache race. `Aspire.Hosting.Dotnet` 17.0.0 now provides stable
+`AddDotnetProject` registration and its coordinated build, without an
+experimental-warning suppression.
 
 Observed one `__dotnet-project-build` traversal restoring/building the service
 host and worker projects once, with zero warnings/errors. Workers then launched
@@ -185,7 +193,7 @@ limit on the long-running checkpoint rather than returning invented metrics.
 ## 5. Clients own connections; readiness checks dependencies
 
 The relevant service projects use `Aspire.Npgsql`, `Aspire.RabbitMQ.Client` and
-`Aspire.StackExchange.Redis` 13.6.5. Their supported DI registrations supply
+`Aspire.StackExchange.Redis` 17.0.0. Their supported DI registrations supply
 the data source, broker connection and Redis multiplexer, plus dependency health
 checks and operation telemetry. Direct package references and manual client
 construction were removed.

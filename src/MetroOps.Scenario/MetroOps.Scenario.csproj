@@ -2,6 +2,6 @@
   <ItemGroup>
     <ProjectReference Include="../MetroOps.ServiceDefaults/MetroOps.ServiceDefaults.csproj" />
     <ProjectReference Include="../MetroOps.Simulation.Persistence/MetroOps.Simulation.Persistence.csproj" />
-    <PackageReference Include="Aspire.RabbitMQ.Client" Version="13.6.5" />
+    <PackageReference Include="Aspire.RabbitMQ.Client" Version="17.0.0" />
   </ItemGroup>
 </Project>

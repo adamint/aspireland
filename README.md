@@ -11,8 +11,8 @@ Train movement, outages, and journey times follow the simulation clock.
 ## Run it locally
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) **10.0.404**
-  (see [`global.json`](global.json)) and the Aspire CLI **13.6.5**:
-  `dotnet tool install --global Aspire.Cli --version 13.6.5`.
+  (see [`global.json`](global.json)) and the Aspire CLI **17.0.0**, pinned in
+  [`dotnet-tools.json`](dotnet-tools.json).
 - Docker Engine or Docker Desktop, running. Aspire starts Postgres, RabbitMQ,
   and Redis for you.
 - [Node.js](https://nodejs.org/) **24 LTS** with npm, and
@@ -26,14 +26,23 @@ not the explicitly named database volume.
 
 ```sh
 cd -P .
+dotnet tool restore
+dotnet aspire --version
 npm ci --prefix web
-aspire start --isolated --non-interactive
-aspire wait operations-web --timeout 180 --non-interactive
-aspire wait passenger-web --timeout 180 --non-interactive
-aspire describe --non-interactive
+dotnet aspire start --isolated --non-interactive
+dotnet aspire wait operations-web --timeout 180 --non-interactive
+dotnet aspire wait passenger-web --timeout 180 --non-interactive
+dotnet aspire describe --non-interactive
 ```
 
-Open the two web URLs from `aspire describe`. Ports change between starts.
+Use `dotnet aspire` from this clone so a different machine-wide CLI cannot
+select a preview release. The AppHost and core integrations are pinned to GA
+17.0.0. The optional `Aspire.Hosting.Foundry` and
+`Aspire.Azure.AI.Extensions.OpenAI` integrations only ship as
+`17.0.0-preview.1.26567.5` in that release train; those two packages remain
+preview. Foundry stays off unless explicitly enabled.
+
+Open the two web URLs from `dotnet aspire describe`. Ports change between starts.
 Use the Aspire Dashboard to follow a request across the graph or run
 **Check passenger inventory** on `analytics` and **Inspect Airport arrivals**
 on `information`.
@@ -44,7 +53,7 @@ picker uses New York time. Confirming starts a fresh scenario with the same
 seed for each preset and resets trains, riders, incidents, and dispatch
 settings. Watch the clock and passenger demand in Dispatch after switching.
 
-`aspire stop --non-interactive` stops the instance, not its database volume.
+`dotnet aspire stop --non-interactive` stops the instance, not its database volume.
 See [the runbook](docs/deploy.md#keep-the-world) before relying on a saved world.
 
 ## Try the loop
@@ -72,7 +81,7 @@ uv run --python 3.13 tests/smoke.py \
   --operations "$OPERATIONS_WEB_URL" --passenger "$PASSENGER_WEB_URL"
 ```
 
-Set both variables from `aspire describe`. Allow up to 20 minutes for the
+Set both variables from `dotnet aspire describe`. Allow up to 20 minutes for the
 turnback check; achieved clock speed depends on the host. `--voice` is opt-in
 and sends real, billable requests to Foundry.
 

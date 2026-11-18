@@ -3,7 +3,7 @@ using System.ClientModel.Primitives;
 using System.Net;
 using System.Text;
 using System.Text.Json;
-using Azure.AI.OpenAI;
+using OpenAI;
 using MetroOps.Contracts;
 using MetroOps.AiHost;
 using MetroOps.Dispatch;
@@ -19,6 +19,7 @@ public sealed class AiTransportTests
         var requests = new List<JsonElement>();
         using var http = new HttpClient(new Handler(async (request, _) =>
         {
+            Assert.Equal("/openai/v1/chat/completions", request.RequestUri!.AbsolutePath);
             requests.Add(JsonDocument.Parse(await request.Content!.ReadAsStringAsync()).RootElement.Clone());
             return JsonResponse(requests.Count == 1 ? ToolResponse : TextResponse);
         }));
@@ -189,8 +190,11 @@ public sealed class AiTransportTests
 
     private static OpenAiClient Client(HttpClient http) => new(
         new OpenAiSettings { ConnectionName = "chat", TextModel = "gpt41" },
-        new AzureOpenAIClient(new Uri("https://example.cognitiveservices.azure.com/"), new ApiKeyCredential("test"),
-            new AzureOpenAIClientOptions { Transport = new HttpClientPipelineTransport(http) }));
+        new OpenAIClient(new ApiKeyCredential("test"), new OpenAIClientOptions
+        {
+            Endpoint = new Uri("https://example.cognitiveservices.azure.com/openai/v1/"),
+            Transport = new HttpClientPipelineTransport(http)
+        }));
 
     private static HttpResponseMessage JsonResponse(string json) => new(HttpStatusCode.OK)
     { Content = new StringContent(json, Encoding.UTF8, "application/json") };

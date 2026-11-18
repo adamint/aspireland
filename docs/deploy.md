@@ -40,6 +40,8 @@ restart or when pointing at an existing volume.
 
 ```sh
 cd -P .
+dotnet tool restore
+dotnet aspire --version
 export MetroOps__PostgresVolume=metroops-demo-postgres
 (umask 077; mkdir -p "$HOME/.config/metroops"
  set -C; openssl rand -hex 32 > "$HOME/.config/metroops/postgres-password")
@@ -48,10 +50,10 @@ npm ci --prefix web
 npm run build:conference --prefix web
 env MetroOps__ProvisionFoundry=false \
   "Parameters__postgres-password=$(cat "$HOME/.config/metroops/postgres-password")" \
-  aspire start --isolated --non-interactive
-aspire wait passenger-api --timeout 180 --non-interactive
-aspire wait operations-web --timeout 180 --non-interactive
-aspire describe --non-interactive
+  dotnet aspire start --isolated --non-interactive
+dotnet aspire wait passenger-api --timeout 180 --non-interactive
+dotnet aspire wait operations-web --timeout 180 --non-interactive
+dotnet aspire describe --non-interactive
 ```
 
 Start the attendee origin in a private terminal. Set `PASSENGER_API_PORT` to
@@ -155,10 +157,39 @@ revision against that volume. Don't delete the original volume to make room.
 ## Stop the demo
 
 Stop Caddy (or close public ingress), then stop the attendee process and run
-`aspire stop --non-interactive` from the demo clone. For foreground processes,
+`dotnet aspire stop --non-interactive` from the demo clone. For foreground processes,
 use Ctrl+C. Don't delete the database volume.
 
 ## Upgrade an existing world
+
+### Upgrade to Aspire 17
+
+Schedule a maintenance window; don't restart a live talk. Restore the pinned
+CLI with `dotnet tool restore` in the release clone and check that
+`dotnet aspire --version` reports 17.0.0.
+
+Stop the existing writers and back up the retained database as above. Stop
+only that AppHost, using its explicit `--apphost` path. Never run two graphs
+against the same database. Keep both the existing volume name and its actual
+PostgreSQL password: a new isolated checkout generates different user secrets.
+Supply the retained password privately through `Parameters__postgres-password`
+and the volume through `MetroOps__PostgresVolume`; don't put either in Git or logs.
+Keep `MetroOps__ProvisionFoundry=false` unless a separate cloud change is approved.
+Aspire 17 currently selects PostgreSQL 18.6 rather than the earlier 18.3 image;
+both use major version 18, but keep the backup for rollback.
+
+Start the release AppHost with the pinned CLI and wait for its resources.
+Check the retained scenario identity/generation, passenger conservation and
+fresh station boards before reopening traffic. Don't use **Set simulation
+time**: that command deliberately resets the world. The Aspire-only upgrade
+doesn't need the history-format migration described below.
+
+Rediscover the `passenger-api` HTTP port. If it changed, restart only the attendee
+origin with the new upstream, the same sealed build and the same listener port
+(for example, 6173). Leave the tunnel/public URL and permissions unchanged.
+Expect a short maintenance gap; an unchanged public URL is not zero downtime.
+
+### Upgrade the history format
 
 When moving an existing database to the bounded history and single-snapshot
 outbox, don't restart just one writer against a mix of old and new processes.
@@ -167,7 +198,7 @@ outbox, don't restart just one writer against a mix of old and new processes.
    `scenario`, `control`, `dispatch` and `incidents`. Keep all five stopped
    while you back up Postgres. Archive older events separately if you need them.
 2. Deploy the new revision. Rebuild and start **`scenario` first**, leaving
-   the other four stopped. Wait for `aspire wait scenario --non-interactive`
+   the other four stopped. Wait for `dotnet aspire wait scenario --non-interactive`
    to report healthy. Scenario migrates the schema, prunes history and
    rebuilds the pending passenger snapshot from the checkpoint without
    resetting the world. If restarting the whole AppHost, use
@@ -185,7 +216,7 @@ shrink files on disk. Check table, TOAST and WAL size after the system settles.
 `VACUUM FULL` rewrites a table and needs free disk space, an exclusive lock
 and a maintenance window. Never delete WAL files manually.
 
-### Roll back
+### Roll back the history migration
 
 The safest rollback is to restore the pre-migration backup into a new volume
 and run the matching old revision. Only that backup can recover pruned rows,

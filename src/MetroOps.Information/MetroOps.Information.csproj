@@ -2,7 +2,7 @@
   <ItemGroup>
     <ProjectReference Include="../MetroOps.ServiceDefaults/MetroOps.ServiceDefaults.csproj" />
     <ProjectReference Include="../MetroOps.Domain/MetroOps.Domain.csproj" />
-    <PackageReference Include="Aspire.RabbitMQ.Client" Version="13.6.5" />
-    <PackageReference Include="Aspire.StackExchange.Redis" Version="13.6.5" />
+    <PackageReference Include="Aspire.RabbitMQ.Client" Version="17.0.0" />
+    <PackageReference Include="Aspire.StackExchange.Redis" Version="17.0.0" />
   </ItemGroup>
 </Project>

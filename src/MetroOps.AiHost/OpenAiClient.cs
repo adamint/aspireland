@@ -1,22 +1,22 @@
 using System.ClientModel;
 using System.Diagnostics;
 using System.Text.Json;
-using Azure.AI.OpenAI;
 using Azure.Identity;
 using MetroOps.Contracts;
+using OpenAI;
 using OpenAI.Audio;
 using OpenAI.Chat;
 using ChatMessage = OpenAI.Chat.ChatMessage;
 
 namespace MetroOps.AiHost;
 
-internal sealed class OpenAiClient(OpenAiSettings settings, AzureOpenAIClient? client = null)
+internal sealed class OpenAiClient(OpenAiSettings settings, OpenAIClient? client = null)
 {
     private const int MaxToolIterations = 6;
     private const int MaxToolCalls = 12;
     private const int MaxAudioResponseBytes = 10 * 1024 * 1024;
     private static readonly ActivitySource ActivitySource = new("MetroOps.AI");
-    private AzureOpenAIClient Client => client ?? throw new AiUnavailableException("The Foundry OpenAI client is not configured.");
+    private OpenAIClient Client => client ?? throw new AiUnavailableException("The Foundry OpenAI client is not configured.");
 
     public async Task<AssistantResponse> CompleteAsync(
         AssistantRequest request,

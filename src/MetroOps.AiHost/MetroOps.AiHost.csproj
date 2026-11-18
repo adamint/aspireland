@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
   <ItemGroup>
     <ProjectReference Include="../MetroOps.Contracts/MetroOps.Contracts.csproj" />
-    <PackageReference Include="Aspire.Azure.AI.OpenAI" Version="13.6.5-preview.1.26559.7" />
+    <PackageReference Include="Aspire.Azure.AI.Extensions.OpenAI" Version="17.0.0-preview.1.26567.5" />
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
     <PackageReference Include="Microsoft.Extensions.ServiceDiscovery" Version="10.10.0" />
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.21.0" />

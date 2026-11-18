@@ -4,7 +4,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
-using Azure.AI.OpenAI;
+using OpenAI;
 using MetroOps.AiHost;
 using MetroOps.Contracts;
 using MetroOps.OperationsApi;
@@ -135,8 +135,11 @@ public sealed class AiBoundaryTests
         builder.WebHost.UseTestServer();
         builder.Configuration["OPERATOR_KEY"] = "operator-test-key";
         var settings = new OpenAiSettings { ConnectionName = "chat", TextModel = "gpt41" };
-        var model = modelHttp is null ? null : new AzureOpenAIClient(new Uri("https://example.cognitiveservices.azure.com/"),
-            new ApiKeyCredential("test"), new AzureOpenAIClientOptions { Transport = new HttpClientPipelineTransport(modelHttp) });
+        var model = modelHttp is null ? null : new OpenAIClient(new ApiKeyCredential("test"), new OpenAIClientOptions
+        {
+            Endpoint = new Uri("https://example.cognitiveservices.azure.com/openai/v1/"),
+            Transport = new HttpClientPipelineTransport(modelHttp)
+        });
         builder.Services.AddSingleton(settings);
         builder.Services.AddSingleton(new OpenAiClient(settings, model));
         builder.Services.AddHttpClient<ServiceJsonClient>().ConfigurePrimaryHttpMessageHandler(() => new Handler((_, _) =>

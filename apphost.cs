@@ -1,11 +1,11 @@
-#:package Aspire.Hosting.Dotnet@13.6.5-preview.1.26559.7
-#:package Aspire.Hosting.Foundry@13.6.5-preview.1.26559.7
-#:package Aspire.Hosting.JavaScript@13.6.5
-#:package Aspire.Hosting.PostgreSQL@13.6.5
-#:package Aspire.Hosting.Python@13.6.5
-#:package Aspire.Hosting.RabbitMQ@13.6.5
-#:package Aspire.Hosting.Redis@13.6.5
-#:sdk Aspire.AppHost.Sdk@13.6.5
+#:package Aspire.Hosting.AppHost@17.0.0
+#:package Aspire.Hosting.Dotnet@17.0.0
+#:package Aspire.Hosting.Foundry@17.0.0-preview.1.26567.5
+#:package Aspire.Hosting.JavaScript@17.0.0
+#:package Aspire.Hosting.PostgreSQL@17.0.0
+#:package Aspire.Hosting.Python@17.0.0
+#:package Aspire.Hosting.RabbitMQ@17.0.0
+#:package Aspire.Hosting.Redis@17.0.0
 #:property AspireUseCliBundle=true
 #:property UserSecretsId=aspireland-metroops-local
 #:property TreatProjectReferencesAsResources=false
@@ -21,8 +21,6 @@ using Aspire.Hosting.Foundry;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using MetroOps.Contracts;
-
-#pragma warning disable ASPIREDOTNETPROJECT001
 
 var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions
 {
