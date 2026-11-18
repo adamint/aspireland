@@ -12,7 +12,7 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     server: {
-      host: "0.0.0.0",
+      host: "127.0.0.1",
       port,
       strictPort: true,
       proxy: {
@@ -24,7 +24,7 @@ export default defineConfig(({ mode }) => {
       },
     },
     preview: {
-      host: "0.0.0.0",
+      host: "127.0.0.1",
       port,
       strictPort: true,
     },
