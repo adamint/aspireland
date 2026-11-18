@@ -5,9 +5,9 @@ import { JourneyCards } from "../components/JourneyCards";
 import { NetworkMap } from "../components/NetworkMap";
 import { StationBoardView } from "../components/StationBoardView";
 import { TransitBrand } from "../components/TransitBrand";
-import { formatClock, formatDateTimeLocal, formatWallTimestamp, lineFor, parseSimulatedLocalInput, relativeFreshness, stationName, titleCase, viewerTimeZone } from "../format";
+import { formatClock, formatDateTimeLocal, formatDuration, formatWallTimestamp, lineFor, parseSimulatedLocalInput, relativeFreshness, stationName, titleCase, viewerTimeZone } from "../format";
 import { useCapabilities, useStationBoard, useWorld } from "../hooks";
-import { activeStationIncidents, lineIncidents } from "../passengerData";
+import { activeStationIncidents, lineIncidents, publicAlert, publicTrainStatus } from "../passengerData";
 import type { JourneyResult, NetworkDefinition, TrainState, WorldState } from "../types";
 
 function usePath() {
@@ -41,9 +41,8 @@ function PassengerHeader({
   return (
     <>
       <div className="public-sim-banner">
-        <span>{stale ? "Simulation · updates delayed" : "Simulated service"}</span>
+        <span>{stale ? "Updates delayed" : "Travel date and time"}</span>
         <strong>{formatClock(simulatedTime)}</strong>
-        <span>This is simulated service, not a real transit system.</span>
       </div>
       <header className="passenger-header">
         <button className="passenger-brand" onClick={() => onNavigate("/")} aria-label="Aspireland Transit home">
@@ -61,12 +60,12 @@ function PassengerHeader({
   );
 }
 
-function ServiceStatus({ world, network }: { world: WorldState; network: NetworkDefinition }) {
+function ServiceStatus({ world, network, stale }: { world: WorldState; network: NetworkDefinition; stale: boolean }) {
   return (
     <section className="public-section status-section" id="status">
       <div className="section-heading">
-        <div><span className="eyebrow">Right now</span><h2>Service status</h2></div>
-        <span className="updated-label">Updated {relativeFreshness(world.updatedAt)}</span>
+        <div><span className="eyebrow">{stale ? "Last report" : "Right now"}</span><h2>Service status</h2></div>
+        <span className="updated-label">Last updated {formatWallTimestamp(world.updatedAt)}</span>
       </div>
       <div className="line-status-grid">
         {network.lines.map((line) => {
@@ -78,22 +77,31 @@ function ServiceStatus({ world, network }: { world: WorldState; network: Network
           );
           const operating = world.trains.filter((train) => train.line === line.id && !["withdrawn", "reserve"].includes(train.state)).length;
           return (
-            <article key={line.id} className={`line-status-card ${incidents.length ? "line-status-card--alert" : ""}`}>
+            <article key={line.id} id={`line-${line.id.toLowerCase()}`} tabIndex={-1}
+              className={`line-status-card ${incidents.length ? "line-status-card--alert" : ""}`}>
               <header>
                 <span className={`public-line-icon public-line-icon--${line.id.toLowerCase()}`}>{line.id}</span>
-                <div><strong>{line.name}</strong><small>{operating} trains in service</small></div>
-                <span className={incidents.length ? "status-alert" : "status-good"}>{incidents.length ? "Service alert" : "Good service"}</span>
+                <div><strong>{line.name}</strong><small>{stale ? `Last report: ${operating} in service` : `${operating} trains in service`}</small></div>
+                <span className={stale ? "status-unknown" : incidents.length ? "status-alert" : "status-good"}>
+                  {stale ? "Status unavailable" : incidents.length ? "Service alert" : "No service alerts"}
+                </span>
               </header>
               {incidents.length ? (
                 <div className="line-alerts">
-                  {incidents.slice(0, 3).map((incident) => (
-                    <p key={incident.id}><strong>{titleCase(incident.kind)}:</strong> {incident.description}</p>
-                  ))}
+                  {stale && <p>These are the last reported alerts.</p>}
+                  {incidents.slice(0, 3).map((incident) => {
+                    const alert = publicAlert(incident, network, world.trains);
+                    return <p key={incident.id}><strong>{alert.location} — {alert.title}:</strong> {alert.description}</p>;
+                  })}
                   {affected.size > 0 && <small>Affected: {[...affected].join(", ")}</small>}
                 </div>
               ) : (
-                <p>No current disruptions are reported on this line.</p>
+                <p>{stale ? "Live service status is unavailable. Check again before travelling." : "No service alerts reported on this line."}</p>
               )}
+              <details className="public-line-stops">
+                <summary>Stops</summary>
+                <ol>{line.stations.map((id) => <li key={id}><a href={`/stations/${id}`}>{stationName(network, id)}</a></li>)}</ol>
+              </details>
             </article>
           );
         })}
@@ -149,7 +157,7 @@ function JourneyPlanner({
     <section className="public-section journey-planner-section" id="plan">
       <div className="journey-planner-intro">
         <h2>Where are you going?</h2>
-        <p>Compare live routes, including step-free options.</p>
+        <p>Find a route, check travel times and avoid stairs if you need to.</p>
         <div className="planner-time-callout">
           <span>Leave now at</span>
           <strong>{formatClock(world.simTime)}</strong>
@@ -187,10 +195,10 @@ function JourneyPlanner({
           )}
           <label className="accessible-check">
             <input type="checkbox" checked={accessible} onChange={(event) => setAccessible(event.target.checked)} />
-            <span>Step-free route only</span>
+            <span>Step-free trip</span>
           </label>
           <button className="public-primary-button" disabled={loading || origin === destination}>
-            {loading ? "Planning…" : "Plan journey"}
+            {loading ? "Finding a route…" : "Find a route"}
           </button>
         </div>
         {origin === destination && <div className="notice notice--warning">Choose two different stations.</div>}
@@ -201,7 +209,7 @@ function JourneyPlanner({
   );
 }
 
-function AccessibilityPanel({ world, network }: { world: WorldState; network: NetworkDefinition }) {
+function AccessibilityPanel({ world, network, stale }: { world: WorldState; network: NetworkDefinition; stale: boolean }) {
   const restrictions = world.incidents.filter((incident) =>
     incident.state === "active" &&
     ["elevator-outage", "circulation", "platform-closure", "station-closure"].includes(incident.kind),
@@ -210,40 +218,43 @@ function AccessibilityPanel({ world, network }: { world: WorldState; network: Ne
     <section className="accessibility-panel" id="accessibility">
       <div>
         <span className="accessibility-symbol" aria-hidden="true">♿</span>
-        <span className="eyebrow">Accessibility status</span>
-        <h2>Step-free travel updates</h2>
-        <p>The ordinary journey form can avoid known inaccessible paths. You do not need the AI assistant to plan an accessible trip.</p>
+        <span className="eyebrow">Step-free travel</span>
+        <h2>Elevator and station access</h2>
+        <p>Choose “Step-free trip” to avoid stairs.</p>
+        <small>Last updated {formatWallTimestamp(world.updatedAt)}</small>
       </div>
       <div className="accessibility-updates">
-        {restrictions.length === 0 ? (
-          <div className="access-good"><strong>All modeled step-free paths are available.</strong><span>Last updated {formatWallTimestamp(world.updatedAt)} local</span></div>
-        ) : restrictions.map((incident) => (
-          <article key={incident.id}>
-            <strong>{stationName(network, incident.target.split(":")[0])}</strong>
-            <span>{titleCase(incident.kind)}</span>
-            <p>{incident.description}</p>
-          </article>
-        ))}
+        {stale && <div className="notice notice--warning"><strong>Access status unavailable</strong><p>Updates are delayed. Check again before travelling.</p></div>}
+        {!stale && restrictions.length === 0 && <div className="access-good"><strong>No access alerts reported</strong></div>}
+        {restrictions.map((incident) => {
+          const alert = publicAlert(incident, network, world.trains);
+          return <article key={incident.id}>
+            <strong>{alert.location}</strong>
+            <span>{stale ? "Last report: " : ""}{alert.title}</span>
+            <p>{alert.description}</p>
+          </article>;
+        })}
       </div>
     </section>
   );
 }
 
-function TrainFacts({ train, network }: { train: TrainState; network: NetworkDefinition }) {
+function TrainFacts({ train, network, stale }: { train: TrainState; network: NetworkDefinition; stale: boolean }) {
   const currentStation = network.stations.find((station) => station.id === train.stationId);
   const nextStation = network.stations.find((station) => station.id === train.nextStationId);
-  const locationLabel = train.state === "travelling" ? "Departed" : train.state === "uncertain" ? "Last reported station" : "Current station";
+  const inService = !["reserve", "withdrawn"].includes(train.state);
+  const locationLabel = stale || train.state === "uncertain" ? "Last reported station" : train.state === "travelling" ? "Departed" : "Current station";
   return (
     <dl className="public-train-facts">
-      <div><dt>Status</dt><dd>{titleCase(train.state)}</dd></div>
+      <div><dt>{stale ? "Last reported status" : "Status"}</dt><dd>{publicTrainStatus(train.state)}</dd></div>
       <div><dt>{locationLabel}</dt><dd>{currentStation?.name ?? "Not reported"}</dd></div>
-      <div><dt>Next station</dt><dd>{nextStation?.name ?? "Not reported"}</dd></div>
-      <div>
+      {inService && <div><dt>{stale ? "Last reported next station" : "Next station"}</dt><dd>{nextStation?.name ?? "Not reported"}</dd></div>}
+      {inService && <div>
         <dt>Crowding</dt>
         <dd>{train.capacity > 0
           ? `${train.load} / ${train.capacity} passengers · ${Math.round(train.load / train.capacity * 100)}% full`
           : `${train.load} passengers · capacity unknown`}</dd>
-      </div>
+      </div>}
     </dl>
   );
 }
@@ -254,40 +265,43 @@ function HomePage({
   capabilities,
   capabilityError,
   onNavigate,
+  stale,
 }: {
   world: WorldState;
   network: NetworkDefinition;
   capabilities: ReturnType<typeof useCapabilities>["data"];
   capabilityError: string | null;
   onNavigate: (path: string) => void;
+  stale: boolean;
 }) {
   const [selectedStationId, setSelectedStationId] = useState<string | null>("central-exchange");
   const [selectedTrainId, setSelectedTrainId] = useState<string | null>(null);
   const board = useStationBoard(selectedStationId);
   const selectedStation = network.stations.find((station) => station.id === selectedStationId);
   const selectedTrain = world.trains.find((train) => train.id === selectedTrainId);
+  const selectedLine = selectedTrain ? lineFor(network, selectedTrain.line) : undefined;
   const activeIncidents = world.incidents.filter((incident) => incident.state === "active");
 
   return (
     <main>
       <section className="passenger-hero">
-        <h1>Plan your journey</h1>
-        <p>Live arrivals and step-free routes across Aspireland.</p>
+        <h1>Plan your trip</h1>
+        <p>Find your next train and a route that works for you.</p>
       </section>
 
       <JourneyPlanner network={network} world={world} />
-      <section className="public-service-summary" aria-label="Live service summary">
-        <div><strong>Service now</strong><a href="#status">{activeIncidents.length ? `${activeIncidents.length} active service ${activeIncidents.length === 1 ? "alert" : "alerts"}` : "No active service alerts"} →</a></div>
+      <section className="public-service-summary" aria-label="Service summary">
+        <div><strong>{stale ? "Service updates delayed" : "Service now"}</strong><a href="#status">{stale ? "Check last reported alerts" : activeIncidents.length ? `${activeIncidents.length} service ${activeIncidents.length === 1 ? "alert" : "alerts"}` : "No service alerts reported"} →</a></div>
         <div className="summary-lines">
-          {network.lines.map((line) => <a href="#status" key={line.id}><span className={`line-pill line-pill--${line.id.toLowerCase()}`}>{line.id}</span><span>{lineIncidents(line, world.trains, world.incidents).length ? "Service alert" : "Good service"}</span></a>)}
+          {network.lines.map((line) => <a href={`#line-${line.id.toLowerCase()}`} key={line.id}><span className={`line-pill line-pill--${line.id.toLowerCase()}`}>{line.id}</span><span>{stale ? "Status unavailable" : lineIncidents(line, world.trains, world.incidents).length ? "Service alert" : "No service alerts"}</span></a>)}
         </div>
       </section>
-      <ServiceStatus world={world} network={network} />
+      <ServiceStatus world={world} network={network} stale={stale} />
 
       <section className="public-section public-map-section" id="map">
         <div className="section-heading">
-          <div><span className="eyebrow">Explore</span><h2>Live system map</h2></div>
-          <p>Choose a station for live arrivals or a train for its current status. Airport Express uses its own dedicated corridor.</p>
+          <div><span className="eyebrow">Explore</span><h2>System map</h2></div>
+          <p>Choose a station for arrivals or a train for its latest reported location and crowding.</p>
         </div>
         <div className="public-map-layout">
           <NetworkMap
@@ -304,35 +318,42 @@ function HomePage({
           />
           <aside className="public-board-preview" aria-label="Map details">
             <div className="board-preview-heading">
-              <span className="eyebrow">{selectedTrain ? "Train details" : "Live arrivals"}</span>
+              <span className="eyebrow">{selectedTrain ? "Train details" : "Arrivals"}</span>
               <h3 aria-live="polite">{selectedTrain?.id ?? selectedStation?.name ?? "Select a station"}</h3>
-              {selectedTrain && <span className={`line-pill line-pill--${selectedTrain.line.toLowerCase()}`}>{lineFor(network, selectedTrain.line)?.name ?? selectedTrain.line}</span>}
+              {selectedTrain && !["reserve", "withdrawn"].includes(selectedTrain.state) && selectedLine && (
+                <a className="public-train-line-link" href={`#line-${selectedTrain.line.toLowerCase()}`}>
+                  {selectedLine.name} status and stops
+                </a>
+              )}
               {selectedStationId && (
                 <button onClick={() => selectedTrain ? setSelectedTrainId(null) : onNavigate(`/stations/${selectedStationId}`)}>
                   {selectedTrain ? `Back to ${selectedStation?.name ?? "station"} arrivals` : "Open full station page →"}
                 </button>
               )}
             </div>
-            {selectedTrain ? <TrainFacts train={selectedTrain} network={network} /> : <StationBoardView
+            {selectedTrain ? <TrainFacts train={selectedTrain} network={network} stale={stale} /> : <StationBoardView
               board={board.data}
               network={network}
               scenarioId={world.scenarioId}
               generation={world.generation}
               loading={board.loading}
               error={board.error}
+              stale={stale}
               compact
             />}
           </aside>
         </div>
       </section>
 
-      <AccessibilityPanel world={world} network={network} />
+      <AccessibilityPanel world={world} network={network} stale={stale} />
 
       <section className="public-section public-assistant-section" id="assistant">
         <div className="assistant-intro">
-          <span className="eyebrow">OpenAI-powered, planner-grounded</span>
-          <h2>Ask in your own words.</h2>
-          <p>Type or use push-to-talk. You can edit the transcript before sending, and every answer remains available as text.</p>
+          <span className="eyebrow">Trip help</span>
+          <h2>Ask about your trip</h2>
+          <p>{capabilities?.text
+            ? capabilities.transcription ? "Type a question, or choose “Push to talk” to record it. Check the words before sending." : "Type a question about routes or arrivals."
+            : "Use the trip planner to find a route, or choose a station for arrival times."}</p>
         </div>
         <AssistantPanel
           kind="passenger"
@@ -352,18 +373,20 @@ function StationPage({
   network,
   world,
   onNavigate,
+  stale,
 }: {
   stationId: string;
   network: NetworkDefinition;
   world: WorldState;
   onNavigate: (path: string) => void;
+  stale: boolean;
 }) {
   const station = network.stations.find((item) => item.id === stationId);
   const board = useStationBoard(station ? stationId : null);
   const stationIncidents = activeStationIncidents(world.incidents, stationId);
   const edges = network.accessEdges.filter((edge) => edge.stationId === stationId);
   const servingLines = network.lines.filter((line) => line.stations.includes(stationId));
-  const trains = world.trains.filter((train) => train.stationId === stationId || train.nextStationId === stationId);
+  const trains = world.trains.filter((train) => !["reserve", "withdrawn"].includes(train.state) && (train.stationId === stationId || train.nextStationId === stationId));
 
   if (!station) {
     return (
@@ -386,17 +409,20 @@ function StationPage({
             {servingLines.map((line) => <span key={line.id} className={`line-pill line-pill--${line.id.toLowerCase()}`}>{line.name}</span>)}
           </div>
         </div>
-        <div className="station-page-updated"><span>Simulated time</span><strong>{formatClock(world.simTime)}</strong><small>Updated {relativeFreshness(world.updatedAt)}</small></div>
+        <div className="station-page-updated"><span>Travel date and time</span><strong>{formatClock(world.simTime)}</strong><small>Last updated {relativeFreshness(world.updatedAt)}</small></div>
       </section>
       {stationIncidents.length > 0 && (
         <section className="station-alert-banner">
-          <strong>{stationIncidents.length} active {stationIncidents.length === 1 ? "alert" : "alerts"}</strong>
-          {stationIncidents.map((incident) => <span key={incident.id}>{titleCase(incident.kind)} · {incident.description}</span>)}
+          <strong>{stale ? "Last reported alerts" : `${stationIncidents.length} ${stationIncidents.length === 1 ? "alert" : "alerts"}`}</strong>
+          {stationIncidents.map((incident) => {
+            const alert = publicAlert(incident, network, world.trains);
+            return <span key={incident.id}>{alert.location} — {alert.title}. {alert.description}</span>;
+          })}
         </section>
       )}
       <section className="station-page-grid">
         <div className="station-board-card">
-          <div className="section-heading"><div><span className="eyebrow">Departures</span><h2>Live arrivals</h2></div></div>
+          <div className="section-heading"><div><span className="eyebrow">Next trains</span><h2>Arrivals</h2></div></div>
           <StationBoardView
             board={board.data}
             network={network}
@@ -404,23 +430,24 @@ function StationPage({
             generation={world.generation}
             loading={board.loading}
             error={board.error}
+            stale={stale}
           />
         </div>
         <aside className="station-info-card">
-          <h2>Station access</h2>
+          <h2 id="accessibility">Elevator and station access</h2>
           <div className="station-info-metrics">
-            <div><span>Entrance capacity</span><strong>{station.accessPerMinute}/min</strong></div>
-            <div><span>Platform capacity</span><strong>{station.platformCapacity}</strong></div>
+            <div><span>Lines</span><strong>{servingLines.length}</strong></div>
+            <div><span>Station paths</span><strong>{edges.length}</strong></div>
             <div><span>Trains nearby</span><strong>{trains.length}</strong></div>
           </div>
-          <h3>Access paths</h3>
+          <h3>Getting through the station</h3>
           {edges.map((edge, index) => {
             const out = stationIncidents.some((incident) => incident.target === edge.equipmentId || incident.kind === "station-closure");
             return (
               <div className={`public-access-edge ${out ? "out" : ""}`} key={`${edge.from}-${edge.to}-${index}`}>
                 <span>{edge.accessible ? "♿" : "↕"}</span>
-                <div><strong>{titleCase(edge.from)} to {titleCase(edge.to)}</strong><small>{edge.seconds}s · {edge.peoplePerMinute} people/min</small></div>
-                <em>{out ? "Out" : "Open"}</em>
+                <div><strong>{titleCase(edge.from)} to {titleCase(edge.to)}</strong><small>{formatDuration(edge.seconds)} estimated · {edge.accessible ? "Step-free" : "Not step-free"}</small></div>
+                <em>{stale ? "Status unavailable" : out ? "Unavailable" : "Available"}</em>
               </div>
             );
           })}
@@ -458,17 +485,18 @@ export function PassengerApp() {
   }
 
   const { world, network } = worldState.data;
+  const stale = worldState.data.stale || Boolean(worldState.error);
   const stationMatch = path.match(/^\/stations\/([^/]+)\/?$/);
   return (
     <div className="passenger-app">
-      <PassengerHeader onNavigate={navigate} simulatedTime={world.simTime} stale={worldState.data.stale || Boolean(worldState.error)} />
-      {(worldState.data.stale || worldState.error) && (
+      <PassengerHeader onNavigate={navigate} simulatedTime={world.simTime} stale={stale} />
+      {stale && (
         <div className="public-data-warning">
-          Live updates are delayed. Last wall-clock update was {formatWallTimestamp(world.updatedAt)} local.
+          Service updates are delayed. Last updated {formatWallTimestamp(world.updatedAt)}. Check again before travelling.
         </div>
       )}
       {stationMatch ? (
-        <StationPage stationId={decodeURIComponent(stationMatch[1])} network={network} world={world} onNavigate={navigate} />
+        <StationPage stationId={decodeURIComponent(stationMatch[1])} network={network} world={world} onNavigate={navigate} stale={stale} />
       ) : (
         <HomePage
           world={world}
@@ -476,11 +504,12 @@ export function PassengerApp() {
           capabilities={capabilities.data}
           capabilityError={capabilities.error}
           onNavigate={navigate}
+          stale={stale}
         />
       )}
       <footer className="passenger-footer">
         <TransitBrand />
-        <p>A synthetic transit network for the Aspireland MetroOps simulator. No real-world travel information is provided.</p>
+        <p>Routes, station access and arrival times for Aspireland.</p>
       </footer>
     </div>
   );

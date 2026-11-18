@@ -84,10 +84,12 @@ it("keeps live boards public and reports stale data explicitly", () => {
   const board: StationBoard = {
     stationId: "university", scenarioId: "current", generation: 4,
     asOf: journey.asOf, updatedAt: journey.asOf, stale: true, restrictions: ["Elevator unavailable"],
-    arrivals: [{ trainId: "green-1", line: "Green", service: "local", platform: "university:Green:+", destination: "southbank", seconds: 60, predictionKind: "live", status: "on-time", load: 10, capacity: 100 }],
+    arrivals: [{ trainId: "green-1", line: "Green", service: "local", platform: "university:Green:+", destination: "southbank", seconds: null, predictionKind: "stale", status: "stale", load: 10, capacity: 100 }],
   };
   const view = render(<StationBoardView board={board} network={network} scenarioId="current" generation={4} loading={false} error={null} />);
-  expect(screen.getByText(/Stale data/)).toBeTruthy();
+  expect(screen.getAllByText("Live arrivals unavailable")).toHaveLength(1);
+  expect(screen.getByText(/Last updated/)).toBeTruthy();
+  expect(screen.queryByText(/ETA unknown|Stale|On Time|1 min/)).toBeNull();
   expect(screen.getByText("Green southbound toward Southbank")).toBeTruthy();
   expect(view.container.textContent).not.toMatch(/university:Green|platform ID|green-1/);
 });
@@ -125,7 +127,7 @@ it("hides a board from a previous scenario while awaiting the matching projectio
       error={null}
     />,
   );
-  expect(screen.getByText(/Refreshing arrivals for the new scenario/)).toBeTruthy();
+  expect(screen.getByText("Updating station arrivals…")).toBeTruthy();
   expect(screen.queryByText("Southbank")).toBeNull();
 });
 
@@ -136,8 +138,21 @@ it("distinguishes an incoming terminating train from a boardable onward service 
     arrivals: [{ trainId: "ax-1", line: "AX", service: "express", platform: "airport:AX:-", destination: "airport", seconds: 180, predictionKind: "live", status: "on-time", load: 10, capacity: 100 }],
   };
   render(<StationBoardView board={board} network={network} scenarioId="current" generation={4} loading={false} error={null} />);
-  expect(screen.getByText("Terminates here")).toBeTruthy();
-  expect(screen.getByText("Arriving at Airport. No onward service.")).toBeTruthy();
+  expect(screen.getByText("Last stop")).toBeTruthy();
+  expect(screen.getByText("Arriving at Airport. This train ends here.")).toBeTruthy();
   expect(screen.queryByText("AX toward Airport")).toBeNull();
   expect(screen.getByText("3 min")).toBeTruthy();
+});
+
+it.each(["projection", "refresh"] as const)("hides arrival estimates when %s updates fail even if the cached board was fresh", (failure) => {
+  const board: StationBoard = {
+    stationId: "university", scenarioId: "current", generation: 4, asOf: journey.asOf,
+    updatedAt: journey.asOf, stale: false, restrictions: [],
+    arrivals: [{ trainId: "green-1", line: "Green", service: "local", platform: "university:Green:+", destination: "southbank", seconds: 60, predictionKind: "live", status: "on-time", load: 10, capacity: 100 }],
+  };
+  render(<StationBoardView board={board} network={network} scenarioId="current" generation={4} loading={false}
+    stale={failure === "projection"} error={failure === "refresh" ? "Refresh failed" : null} />);
+  expect(screen.getAllByText("Live arrivals unavailable")).toHaveLength(1);
+  expect(screen.getByText(/Last updated/)).toBeTruthy();
+  expect(screen.queryByText(/1 min|On Time|ETA unknown|Stale/)).toBeNull();
 });

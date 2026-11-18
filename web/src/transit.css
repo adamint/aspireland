@@ -236,6 +236,13 @@ html[data-site], .passenger-app { background: var(--cream); color: var(--ink); }
 .public-train-facts dt { color: var(--muted); font-size: .8rem; }
 .public-train-facts dd { margin: 4px 0 0; font-size: .94rem; overflow-wrap: anywhere; }
 .public-board-preview .board-preview-heading > .line-pill { display: table; margin-bottom: 8px; }
+.public-train-line-link { display: inline-flex; align-items: center; min-height: 44px; margin-bottom: 8px; color: var(--brand); text-underline-offset: 3px; }
+.line-status-card { scroll-margin-top: 24px; }
+.line-status-card:focus { outline: 2px solid var(--brand); outline-offset: 3px; }
+.status-unknown { color: var(--muted); font-size: .8rem; font-weight: 600; }
+.public-line-stops summary { min-height: 44px; padding: 12px 0; cursor: pointer; }
+.public-line-stops ol { margin: 0; padding-left: 24px; }
+.public-line-stops a { display: inline-flex; align-items: center; min-height: 44px; color: var(--brand); }
 .network-map-shell--calm .crowd-halo { pointer-events: none; }
 .network-map-shell--calm .map-train:not([role="button"]) { cursor: inherit; }
 .network-map-shell--calm .map-train.selected > rect:first-child,

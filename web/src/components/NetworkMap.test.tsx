@@ -91,7 +91,7 @@ it("offers a stable train directory with keyboard activation and current selecti
   const trains = [train, { ...train, id: "blue-2" }];
   const props = { network, world: { ...world, trains }, selectedTrainId: "blue-2", onSelectTrain, onSelectStation: vi.fn(), calm: true };
   const view = render(<NetworkMap {...props} />);
-  const summary = view.getByText("Train directory and keyboard-accessible map alternative");
+  const summary = view.getByText("Find a train");
   const directory = summary.closest("details")!;
   fireEvent.click(summary);
   expect(within(directory).getByRole("list")).toBeTruthy();

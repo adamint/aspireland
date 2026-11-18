@@ -83,9 +83,9 @@ it("sends the viewer timezone and renders typed arrival tools with safe text and
     capabilities={{ text: true, transcription: false, speech: false, provider: "OpenAI" }} capabilityError={null} />);
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "University arrivals" } });
   fireEvent.click(screen.getByRole("button", { name: "Send" }));
-  await screen.findByRole("table", { name: "Live station arrivals" });
+  await screen.findByRole("table", { name: "Station arrivals" });
   expect(assistant.mock.calls[0][0].viewerTimeZone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
-  expect(screen.getByText("Stale data", { exact: false })).toBeTruthy();
+  expect(screen.getByText("Live arrivals unavailable")).toBeTruthy();
   expect(view.container.querySelector(".tool-provenance")?.hasAttribute("open")).toBe(false);
   expect(view.container.textContent).not.toMatch(/Resolve_station|university:Green|\*\*/);
   fireEvent.click(screen.getByText("Sources used"));
@@ -94,6 +94,6 @@ it("sends the viewer timezone and renders typed arrival tools with safe text and
 
   view.rerender(<AssistantPanel kind="passenger" network={network} currentScenarioId="replacement" currentGeneration={4}
     capabilities={{ text: true, transcription: false, speech: false, provider: "OpenAI" }} capabilityError={null} />);
-  expect(screen.queryByRole("table", { name: "Live station arrivals" })).toBeNull();
-  expect(screen.getByText(/Refreshing arrivals for the new scenario/)).toBeTruthy();
+  expect(screen.queryByRole("table", { name: "Station arrivals" })).toBeNull();
+  expect(screen.getByText("Updating station arrivals…")).toBeTruthy();
 });

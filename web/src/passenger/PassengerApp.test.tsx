@@ -81,9 +81,9 @@ const train: TrainState = {
   compatibleLines: ["Blue"],
 };
 
-function showWorld(world: WorldState) {
-  const snapshot: WorldSnapshot = { world, network, stale: false };
-  useWorld.mockReturnValue({ data: snapshot, error: null, loading: false, lastSuccess: new Date(), refresh: vi.fn() });
+function showWorld(world: WorldState, stale = false, error: string | null = null) {
+  const snapshot: WorldSnapshot = { world, network, stale };
+  useWorld.mockReturnValue({ data: snapshot, error, loading: false, lastSuccess: new Date(), refresh: vi.fn() });
 }
 
 beforeEach(() => {
@@ -128,7 +128,7 @@ it.each(["westhaven>old-town", "old-town>westhaven"])(
 
   expect(within(screen.getByText("Blue Line").closest("article") as HTMLElement).getByText("Service alert")).toBeTruthy();
   expect(within(screen.getByText("Amber Line").closest("article") as HTMLElement).getByText("Service alert")).toBeTruthy();
-  expect(within(screen.getByText("Green Line").closest("article") as HTMLElement).getByText("Good service")).toBeTruthy();
+  expect(within(screen.getByText("Green Line").closest("article") as HTMLElement).getByText("No service alerts")).toBeTruthy();
   },
 );
 
@@ -151,7 +151,7 @@ it("ignores cleared station incidents and restored equipment", () => {
   render(<PassengerApp />);
 
   expect(screen.queryByText(/active alert/)).toBeNull();
-  expect(screen.getByText("Open")).toBeTruthy();
+  expect(screen.getByText("Available")).toBeTruthy();
   expect(screen.queryByText("Out")).toBeNull();
 });
 
@@ -165,7 +165,7 @@ it("converts leave-later values from the viewer's local zone to UTC", async () =
 
   fireEvent.click(screen.getByRole("button", { name: "Leave later" }));
   fireEvent.change(screen.getByLabelText("Departure date and time (America/New_York)"), { target: { value: "2026-11-17T08:00" } });
-  fireEvent.click(screen.getByRole("button", { name: "Plan journey" }));
+  fireEvent.click(screen.getByRole("button", { name: "Find a route" }));
 
   await waitFor(() => expect(journey).toHaveBeenCalled());
   expect(journey.mock.calls[0][0].departureTime).toBe("2026-11-17T13:00:00.000Z");
@@ -190,8 +190,8 @@ it("opens read-only train details and restores arrivals when the same station is
 
   const details = screen.getByRole("complementary", { name: "Map details" });
   expect(within(details).getByRole("heading", { name: "blue-1" })).toBeTruthy();
-  expect(within(details).getByText("Blue Line")).toBeTruthy();
-  expect(within(details).getByText("Travelling")).toBeTruthy();
+  expect(within(details).getByRole("link", { name: "Blue Line status and stops" })).toBeTruthy();
+  expect(within(details).getByText("Between stations")).toBeTruthy();
   expect(within(details).getByText("Departed")).toBeTruthy();
   expect(within(details).getByText("Westhaven")).toBeTruthy();
   expect(within(details).getByText("Next station")).toBeTruthy();
@@ -202,7 +202,7 @@ it("opens read-only train details and restores arrivals when the same station is
 
   fireEvent.click(screen.getByRole("button", { name: "Central Exchange station" }));
 
-  expect(within(details).getByText("Live arrivals")).toBeTruthy();
+  expect(within(details).getByText("Arrivals")).toBeTruthy();
   expect(within(details).getByRole("heading", { name: "Central Exchange" })).toBeTruthy();
   expect(within(details).queryByRole("heading", { name: "blue-1" })).toBeNull();
   expect(useStationBoard).toHaveBeenLastCalledWith("central-exchange");
@@ -230,11 +230,11 @@ it("keeps keyboard-selected train details current without inventing unknown loca
 
   showWorld({ ...baseWorld, version: 4, trains: [{ ...train, state: "held", stationId: "central-exchange", nextStationId: null, load: 20 }] });
   view.rerender(<PassengerApp />);
-  expect(within(details).getByText("Held")).toBeTruthy();
+  expect(within(details).getByText("Waiting at the station")).toBeTruthy();
   expect(within(details).getByText("Current station")).toBeTruthy();
   expect(within(details).getByText("20 / 100 passengers · 20% full")).toBeTruthy();
   fireEvent.click(within(details).getByRole("button", { name: /Back to Central Exchange arrivals/ }));
-  expect(within(details).getByText("Live arrivals")).toBeTruthy();
+  expect(within(details).getByText("Arrivals")).toBeTruthy();
 });
 
 it("does not offer dead train buttons on a station mini-map", () => {
@@ -247,4 +247,58 @@ it("does not offer dead train buttons on a station mini-map", () => {
   expect(marker.getAttribute("tabindex")).toBeNull();
   expect(marker.getAttribute("aria-hidden")).toBe("true");
   expect(screen.getByRole("button", { name: "Central Exchange station" })).toBeTruthy();
+});
+
+it("uses rider language and links a stopped train to its line status and stops", () => {
+  showWorld({ ...baseWorld, trains: [{ ...train, state: "dwelling" }] });
+  const view = render(<PassengerApp />);
+
+  expect(screen.getByRole("checkbox", { name: "Step-free trip" })).toBeTruthy();
+  expect(screen.getByText("Choose “Step-free trip” to avoid stairs.")).toBeTruthy();
+  expect(screen.getByText("No access alerts reported")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: /^blue-1,/ }));
+
+  const details = screen.getByRole("complementary", { name: "Map details" });
+  expect(within(details).getByText("At the station")).toBeTruthy();
+  expect(screen.getByRole("button", { name: /^blue-1,/ }).getAttribute("aria-label")).toContain("At the station");
+  expect(within(screen.getByRole("list", { name: "Trains", hidden: true })).getByText(/At the station/)).toBeTruthy();
+  const lineLink = within(details).getByRole("link", { name: "Blue Line status and stops" });
+  expect(lineLink.getAttribute("href")).toBe("#line-blue");
+  const lineStatus = document.getElementById("line-blue")!;
+  expect(lineStatus.getAttribute("tabindex")).toBe("-1");
+  expect(within(lineStatus).getByText("Stops")).toBeTruthy();
+  expect(within(lineStatus).getByRole("link", { name: "Old Town" }).getAttribute("href")).toBe("/stations/old-town");
+  expect(screen.queryByText(/modeled|ordinary journey|planner-grounded|Dwelling/i)).toBeNull();
+  expect(view.container.textContent).not.toMatch(/simulat|synthetic/i);
+});
+
+it.each([
+  [true, null],
+  [false, "Updates unavailable"],
+] as const)("does not announce clear service or access when updates are delayed (%s, %s)", (stale, error) => {
+  showWorld(baseWorld, stale, error);
+  render(<PassengerApp />);
+
+  expect(screen.queryByText("No access alerts reported")).toBeNull();
+  expect(screen.queryByText(/Good service|No service alerts|No current disruptions|paths are available/i)).toBeNull();
+  expect(screen.getByText("Access status unavailable")).toBeTruthy();
+  expect(screen.getAllByText(/Last updated/).length).toBeGreaterThan(0);
+});
+
+it("does not label old station access as open or available", () => {
+  window.history.replaceState({}, "", "/stations/central-exchange");
+  showWorld(baseWorld, true);
+  render(<PassengerApp />);
+  const access = screen.getByRole("heading", { name: "Elevator and station access" }).closest("aside")!;
+  expect(within(access).getByText("Status unavailable")).toBeTruthy();
+  expect(within(access).queryByText(/^(Open|Available)$/)).toBeNull();
+});
+
+it("clearly identifies reserve trains as not in service", () => {
+  showWorld({ ...baseWorld, trains: [{ ...train, id: "reserve-ba", state: "reserve", line: "", nextStationId: null }] });
+  render(<PassengerApp />);
+  fireEvent.click(screen.getByRole("button", { name: /^reserve-ba,/ }));
+  const details = screen.getByRole("complementary", { name: "Map details" });
+  expect(within(details).getByText("Reserve train — not in service")).toBeTruthy();
+  expect(within(details).queryByRole("link", { name: /status and stops/ })).toBeNull();
 });

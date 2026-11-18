@@ -59,12 +59,12 @@ export function JourneyCards({ result, network, currentGeneration, currentScenar
           </h3>
         </div>
         <span className={`freshness ${invalidated ? "freshness--stale" : ""}`}>
-          {invalidated ? "Scenario changed · plan again" : `As of ${formatSimTimestamp(result.asOf)}`}
+          {invalidated ? "Service information changed · plan again" : `Updated ${formatSimTimestamp(result.asOf)}`}
         </span>
       </div>
       {result.error && <div className="notice notice--error">{result.error}</div>}
       {result.options.length === 0 && !result.error && (
-        <div className="empty-state">No valid itinerary is available for this request.</div>
+        <div className="empty-state">No routes found. Try another station or departure time.</div>
       )}
       <div className="journey-card-grid">
         {result.options.map((option) => (
@@ -76,7 +76,7 @@ export function JourneyCards({ result, network, currentGeneration, currentScenar
               </div>
               <div className="journey-meta">
                 <span>{option.transfers} {option.transfers === 1 ? "transfer" : "transfers"}</span>
-                <span>{option.accessible ? "Step-free" : "Standard access"}</span>
+                <span>{option.accessible ? "Step-free" : "May include stairs"}</span>
                 <span>{titleCase(option.estimateKind)} estimate</span>
               </div>
             </header>
@@ -84,7 +84,7 @@ export function JourneyCards({ result, network, currentGeneration, currentScenar
               {option.legs.map((leg, index) => (
                 <li key={`${option.id}-${index}`} className={`journey-leg journey-leg--${leg.kind}`}>
                   <span className={`leg-icon ${leg.line ? `line-${leg.line.toLowerCase()}` : ""}`}>
-                    {leg.kind === "ride" ? leg.line : leg.kind === "walk" ? "Walk" : titleCase(leg.kind)}
+                    {leg.kind === "ride" ? leg.line : leg.kind === "access" ? "Enter" : leg.kind === "egress" ? "Exit" : titleCase(leg.kind)}
                   </span>
                   <div>
                     <strong>{legTitle(leg, network)}</strong>

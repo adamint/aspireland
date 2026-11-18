@@ -270,7 +270,7 @@ test("AI and voice are explicitly disabled and all operator mutations are denied
   const f = await fixture(t);
   const capabilities = await (await fetch(`${f.origin}/api/capabilities`)).json();
   assert.deepEqual([capabilities.text, capabilities.transcription, capabilities.speech], [false, false, false]);
-  assert.match(capabilities.reason, /disabled/i);
+  assert.match(capabilities.reason, /not available.*trip planner/i);
   for (const route of ["assistant", "speech", "transcribe"]) {
     const response = await rawRequest(f.origin, `/api/${route}`, { method: "POST", body: "{}" });
     assert.equal(response.status, 503);

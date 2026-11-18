@@ -366,14 +366,14 @@ export async function createPassengerServer({
         res.setHeader("Allow", methods.join(", "));
         throw new HttpError(405, "Method not allowed.");
       }
-      if (ai) throw new HttpError(503, "AI and voice are disabled for anonymous conference attendees. Use the ordinary journey planner.");
+      if (ai) throw new HttpError(503, "Trip chat and voice are not available on this shared site. Use the trip planner.");
       if (req.method !== "POST" && (req.headers["transfer-encoding"] || Number(req.headers["content-length"]) > 0)) {
         throw new HttpError(400, "This request must not have a body.");
       }
       if (target === "/api/capabilities") {
         json(200, {
           text: false, transcription: false, speech: false, provider: "disabled",
-          reason: "AI and voice are disabled for anonymous conference attendees. Use the ordinary journey planner.",
+          reason: "Trip chat and voice are not available on this shared site. Use the trip planner.",
         });
       } else if (target === "/api/world") {
         json(200, await worldRead());

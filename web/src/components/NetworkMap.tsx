@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { isWaitingCohort } from "../cohorts";
-import { lineFor, titleCase } from "../format";
+import { lineFor } from "../format";
+import { publicTrainStatus } from "../passengerData";
 import type {
   Incident,
   MapLayer,
@@ -627,7 +628,7 @@ export function NetworkMap({
             tabIndex={onSelectTrain ? 0 : undefined}
             aria-hidden={onSelectTrain ? undefined : true}
             aria-pressed={onSelectTrain && calm ? selected : undefined}
-            aria-label={onSelectTrain ? `${train.id}, ${line?.name ?? train.line}, ${crowding}, ${train.state}${train.holdReason ? `, ${train.holdReason}` : ""}` : undefined}
+            aria-label={onSelectTrain ? `${train.id}, ${line?.name ?? (calm ? "Not in service" : train.line)}, ${crowding}, ${calm ? publicTrainStatus(train.state) : train.state}${!calm && train.holdReason ? `, ${train.holdReason}` : ""}` : undefined}
             data-map-action={onSelectTrain ? true : undefined}
             pointerEvents={onSelectTrain ? undefined : "none"}
             onPointerDown={onSelectTrain && calm ? (event) => {
@@ -792,7 +793,7 @@ export function NetworkMap({
       </div>
 
       <details className="station-directory">
-        <summary>Station directory and keyboard-accessible map alternative</summary>
+        <summary>{calm ? "Find a station" : "Station directory and keyboard-accessible map alternative"}</summary>
         <div className="station-directory-grid">
           {network.stations.map((station) => (
             <button
@@ -810,7 +811,7 @@ export function NetworkMap({
 
       {calm && onSelectTrain && (
         <details className="station-directory train-directory">
-          <summary>Train directory and keyboard-accessible map alternative</summary>
+          <summary>Find a train</summary>
           <ul className="station-directory-grid" aria-label="Trains">
             {directoryTrains.map((train) => (
               <li key={train.id}>
@@ -819,8 +820,8 @@ export function NetworkMap({
                   aria-pressed={train.id === selectedTrainId}
                   onClick={() => onSelectTrain(train.id)}
                 >
-                  <span>{train.id} · {lineFor(network, train.line)?.name ?? train.line}</span>{" "}
-                  <small>{titleCase(train.state)} · {train.capacity > 0 ? `${Math.round(train.load / train.capacity * 100)}% full` : "Capacity unknown"}</small>
+                  <span>{train.id} · {lineFor(network, train.line)?.name ?? "Not in service"}</span>{" "}
+                  <small>{publicTrainStatus(train.state)}{!["reserve", "withdrawn"].includes(train.state) && ` · ${train.capacity > 0 ? `${Math.round(train.load / train.capacity * 100)}% full` : "Capacity unknown"}`}</small>
                 </button>
               </li>
             ))}

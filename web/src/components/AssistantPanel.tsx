@@ -204,8 +204,8 @@ export function AssistantPanel({
           {kind === "passenger" && <span className="eyebrow">Journey assistant</span>}
           <h2>{kind === "operations" ? "Dispatch assistant" : "Ask Aspireland"}</h2>
         </div>
-        <span className={`provider-status ${enabled ? "online" : "offline"}`} title={capabilities?.provider}>
-          {enabled ? kind === "operations" ? "Connected" : capabilities?.provider ?? "OpenAI" : "AI unavailable"}
+        <span className={`provider-status ${enabled ? "online" : "offline"}`} title={kind === "operations" ? capabilities?.provider : undefined}>
+          {kind === "operations" ? enabled ? "Connected" : "AI unavailable" : enabled ? "Chat available" : "Chat unavailable"}
         </span>
         {kind === "operations" && <TransitMark />}
         {onClose && <button className="assistant-close" onClick={onClose} aria-label="Close AI dispatcher">×</button>}
@@ -213,18 +213,20 @@ export function AssistantPanel({
 
       {!enabled && (
         <div className="notice notice--warning">
-          {capabilities?.reason ?? capabilityError ?? "The model provider is not configured. Live forms and boards still work."}
+          {kind === "passenger"
+            ? "Trip chat is unavailable. Use the trip planner above, or check station arrivals."
+            : capabilities?.reason ?? capabilityError ?? "The model provider is not configured. Live forms and boards still work."}
         </div>
       )}
 
       <div className="conversation" ref={conversation}>
         {entries.length === 0 && (
           <div className="assistant-welcome">
-            <strong>{kind === "operations" ? "Investigate the live network." : "Plan with the live network."}</strong>
+            <strong>{kind === "operations" ? "Investigate the live network." : "Get help with your trip."}</strong>
             <p>
               {kind === "operations"
                 ? "Ask why a queue is growing, compare an intervention, or request a bounded proposal."
-                : "Ask for a route, service status, or a step-free alternative. Results come from planner tools."}
+                : "Ask for a route, arrival times, or a trip without stairs."}
             </p>
           </div>
         )}
@@ -322,7 +324,7 @@ export function AssistantPanel({
                   onChange={(event) => setSpeak(event.target.checked)}
                   disabled={!capabilities?.speech}
                 />
-                Speak response <small>AI voice</small>
+                Read answers aloud <small>AI-generated voice</small>
               </label>
               <button className="text-button" onClick={stopAudio}>Stop audio</button>
             </>
@@ -331,7 +333,7 @@ export function AssistantPanel({
             {submitting ? "Working…" : "Send"}
           </button>
         </div>
-        {kind === "passenger" && input.trim() && <small className="transcript-note">Review or edit the transcript before sending.</small>}
+        {kind === "passenger" && input.trim() && <small className="transcript-note">Check the words before sending.</small>}
       </div>
     </section>
   );
