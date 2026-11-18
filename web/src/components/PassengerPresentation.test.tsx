@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { JourneyCards } from "./JourneyCards";
 import { StationBoardView } from "./StationBoardView";
 import type { JourneyResult, NetworkDefinition, StationBoard } from "../types";
 
-afterEach(() => cleanup());
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 const network: NetworkDefinition = {
   stations: [
@@ -45,6 +45,21 @@ const journey: JourneyResult = {
     ],
   }],
 };
+
+it("shows rider journey updates and arrivals in the browser's local day and time", () => {
+  const resolvedOptions = Intl.DateTimeFormat.prototype.resolvedOptions;
+  vi.spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions").mockImplementation(function (this: Intl.DateTimeFormat) {
+    return { ...resolvedOptions.call(this), timeZone: "America/Los_Angeles" };
+  });
+  render(<JourneyCards passenger network={network} result={{
+    ...journey,
+    asOf: "2026-11-18T00:59:00Z",
+    options: [{ ...journey.options[0], arrivesAt: "2026-11-18T01:29:00Z" }],
+  }} />);
+  expect(screen.getByText("Updated Tuesday, November 17 at 4:59 PM")).toBeTruthy();
+  expect(screen.getByText("Arrive Tuesday, November 17 at 5:29 PM")).toBeTruthy();
+  expect(screen.queryByText(/GMT|Europe\/|America\//)).toBeNull();
+});
 
 it("uses passenger-facing station and platform labels in itinerary cards", () => {
   const view = render(<JourneyCards result={journey} network={network} currentGeneration={4} />);

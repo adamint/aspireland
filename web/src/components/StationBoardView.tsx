@@ -1,4 +1,4 @@
-import { formatEta, formatSimTimestamp, formatWallTimestamp, publicPlatformLabel, stationName, titleCase } from "../format";
+import { formatEta, formatPassengerDateTime, formatSimTimestamp, formatWallTimestamp, publicPlatformLabel, stationName, titleCase } from "../format";
 import type { NetworkDefinition, StationBoard } from "../types";
 
 interface StationBoardViewProps {
@@ -10,6 +10,7 @@ interface StationBoardViewProps {
   error: string | null;
   stale?: boolean;
   compact?: boolean;
+  passenger?: boolean;
 }
 
 export function StationBoardView({
@@ -21,6 +22,7 @@ export function StationBoardView({
   error,
   stale = false,
   compact = false,
+  passenger = false,
 }: StationBoardViewProps) {
   if (loading && !board) return <div className="loading-state"><span className="spinner" /> Loading arrivals…</div>;
   if (error && !board) return <div className="notice notice--error">{error}</div>;
@@ -40,9 +42,9 @@ export function StationBoardView({
     <div className={`arrival-board ${compact ? "arrival-board--compact" : ""}`}>
       <div className="arrival-board-status">
         <span className={`freshness ${unavailable ? "freshness--stale" : ""}`}>
-          {unavailable ? "Live arrivals unavailable" : `Arrival times as of ${formatSimTimestamp(board.asOf)}`}
+          {unavailable ? "Live arrivals unavailable" : `Arrival times as of ${(passenger ? formatPassengerDateTime : formatSimTimestamp)(board.asOf)}`}
         </span>
-        <span className="wall-update">Last updated {formatWallTimestamp(board.updatedAt)}</span>
+        <span className="wall-update">Last updated {(passenger ? formatPassengerDateTime : formatWallTimestamp)(board.updatedAt)}</span>
       </div>
       {board.restrictions.length > 0 && (
         <div className="restriction-list">

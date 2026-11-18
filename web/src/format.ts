@@ -16,6 +16,17 @@ export function formatSimTimestamp(value: string, timeZone = viewerTimeZone()): 
 
 export const formatClock = formatSimTimestamp;
 
+export function formatPassengerDateTime(value: string, timeZone = viewerTimeZone(), locale?: string): string {
+  return new Intl.DateTimeFormat(locale, {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone,
+  }).format(new Date(value));
+}
+
 export function formatWallTimestamp(value: string): string {
   return new Intl.DateTimeFormat("en-US", {
     hour: "numeric",

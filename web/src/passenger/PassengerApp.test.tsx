@@ -178,7 +178,8 @@ it("converts leave-later values from the viewer's local zone to UTC", async () =
   render(<PassengerApp />);
 
   fireEvent.click(screen.getByRole("button", { name: "Leave later" }));
-  fireEvent.change(screen.getByLabelText("Departure date and time (America/New_York)"), { target: { value: "2026-11-17T08:00" } });
+  expect(screen.getByLabelText("Departure date and time")).toHaveProperty("value", "2026-11-17T03:00");
+  fireEvent.change(screen.getByLabelText("Departure date and time"), { target: { value: "2026-11-17T08:00" } });
   fireEvent.click(screen.getByRole("button", { name: "Find a route" }));
 
   await waitFor(() => expect(journey).toHaveBeenCalled());

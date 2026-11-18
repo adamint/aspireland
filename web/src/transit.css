@@ -263,6 +263,14 @@ html[data-site], .passenger-app { background: var(--cream); color: var(--ink); }
 .station-page-updated span, .station-page-updated small,
 .public-access-edge small, .public-access-edge em, .station-info-metrics span { color: var(--muted); }
 .station-page-updated strong { color: var(--brand); }
+.station-page-hero { grid-template-columns: auto minmax(0, 1fr) minmax(0, 28rem); }
+.station-page-updated { min-width: 0; justify-self: end; gap: 4px; text-align: right; line-height: 1.5; }
+.station-page-updated strong { margin: 0; text-wrap: balance; }
+.station-page-updated > * { max-width: 100%; }
+@media (max-width: 1000px) {
+  .station-page-hero { grid-template-columns: auto minmax(0, 1fr); }
+  .station-page-updated { grid-column: 1 / -1; justify-self: start; justify-items: start; text-align: left; }
+}
 .station-info-metrics div { background: var(--cream); }
 .public-access-edge { border-color: var(--border); }
 .public-access-edge > span { color: var(--brand); background: var(--brand-tint); border-radius: var(--sign-radius); }
@@ -442,7 +450,7 @@ html[data-site], .passenger-app { background: var(--cream); color: var(--ink); }
 
 @media (max-width: 640px) {
   .ops-app { --ops-gutter: 16px; }
-  .public-sim-banner { padding: 6px 14px; gap: 8px; font-size: .72rem; flex-wrap: wrap; }
+  .public-sim-banner { display: grid; justify-content: start; padding: 6px 14px; gap: 3px; font-size: .72rem; }
   .public-sim-banner strong { font-size: .75rem; }
   .passenger-header { min-height: 64px; }
   .header-access-link { min-height: 44px; display: grid; place-items: center; font-size: .78rem; }

@@ -1,4 +1,4 @@
-import { formatDuration, formatSimTimestamp, publicPlatformLabel, stationName, titleCase } from "../format";
+import { formatDuration, formatPassengerDateTime, formatSimTimestamp, publicPlatformLabel, stationName, titleCase } from "../format";
 import type { JourneyLeg, JourneyResult, NetworkDefinition } from "../types";
 
 interface JourneyCardsProps {
@@ -6,6 +6,7 @@ interface JourneyCardsProps {
   network?: NetworkDefinition;
   currentGeneration?: number;
   currentScenarioId?: string;
+  passenger?: boolean;
 }
 
 function destinationFor(leg: JourneyLeg, network?: NetworkDefinition): string {
@@ -44,7 +45,8 @@ function legPlatform(leg: JourneyLeg, network?: NetworkDefinition): string | nul
   return publicPlatformLabel(network, leg.from, leg.line, destinationFor(leg, network), leg.platform);
 }
 
-export function JourneyCards({ result, network, currentGeneration, currentScenarioId }: JourneyCardsProps) {
+export function JourneyCards({ result, network, currentGeneration, currentScenarioId, passenger = false }: JourneyCardsProps) {
+  const timestamp = passenger ? formatPassengerDateTime : formatSimTimestamp;
   const invalidated = (currentGeneration !== undefined && result.generation !== currentGeneration) ||
     (currentScenarioId !== undefined && result.scenarioId !== currentScenarioId);
   return (
@@ -59,7 +61,7 @@ export function JourneyCards({ result, network, currentGeneration, currentScenar
           </h3>
         </div>
         <span className={`freshness ${invalidated ? "freshness--stale" : ""}`}>
-          {invalidated ? "Service information changed · plan again" : `Updated ${formatSimTimestamp(result.asOf)}`}
+          {invalidated ? "Service information changed · plan again" : `Updated ${timestamp(result.asOf)}`}
         </span>
       </div>
       {result.error && <div className="notice notice--error">{result.error}</div>}
@@ -98,7 +100,7 @@ export function JourneyCards({ result, network, currentGeneration, currentScenar
               ))}
             </ol>
             <footer>
-              <span>Arrive {formatSimTimestamp(option.arrivesAt)}</span>
+              <span>Arrive {timestamp(option.arrivesAt)}</span>
               {option.warnings.length > 0 && (
                 <ul>
                   {option.warnings.map((warning) => <li key={warning}>{warning}</li>)}

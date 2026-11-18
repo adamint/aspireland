@@ -242,6 +242,7 @@ export function AssistantPanel({
             )}
             {entry.payload?.journey && (
               <JourneyCards
+                passenger={kind === "passenger"}
                 result={entry.payload.journey}
                 network={network}
                 currentGeneration={currentGeneration}
@@ -252,6 +253,7 @@ export function AssistantPanel({
               <section className="assistant-arrivals" aria-label="Assistant station arrivals">
                 <h3>{stationName(network, entry.payload.arrivals.stationId)} arrivals</h3>
                 <StationBoardView
+                  passenger={kind === "passenger"}
                   board={entry.payload.arrivals}
                   network={network}
                   scenarioId={currentScenarioId}

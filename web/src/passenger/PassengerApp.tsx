@@ -5,7 +5,7 @@ import { JourneyCards } from "../components/JourneyCards";
 import { NetworkMap } from "../components/NetworkMap";
 import { StationBoardView } from "../components/StationBoardView";
 import { TransitBrand } from "../components/TransitBrand";
-import { formatClock, formatDateTimeLocal, formatDuration, formatWallTimestamp, lineFor, parseSimulatedLocalInput, relativeFreshness, stationName, titleCase, viewerTimeZone } from "../format";
+import { formatPassengerDateTime, formatDateTimeLocal, formatDuration, lineFor, parseSimulatedLocalInput, stationName, titleCase, viewerTimeZone } from "../format";
 import { useCapabilities, useStationBoard, useWorld } from "../hooks";
 import { activeStationIncidents, lineIncidents, publicAlert, publicTrainStatus } from "../passengerData";
 import type { JourneyResult, NetworkDefinition, TrainState, WorldState } from "../types";
@@ -42,7 +42,7 @@ function PassengerHeader({
     <>
       <div className="public-sim-banner">
         <span>{stale ? "Updates delayed" : "Travel date and time"}</span>
-        <strong>{simulatedTime ? formatClock(simulatedTime) : "Updating…"}</strong>
+        <strong>{simulatedTime ? formatPassengerDateTime(simulatedTime) : "Updating…"}</strong>
       </div>
       <header className="passenger-header">
         <button className="passenger-brand" onClick={() => onNavigate("/")} aria-label="Aspireland Transit home">
@@ -65,7 +65,7 @@ function ServiceStatus({ world, network, stale }: { world: WorldState; network: 
     <section className="public-section status-section" id="status">
       <div className="section-heading">
         <div><span className="eyebrow">{stale ? "Last report" : "Right now"}</span><h2>Service status</h2></div>
-        <span className="updated-label">Last updated {formatWallTimestamp(world.updatedAt)}</span>
+        <span className="updated-label">Last updated {formatPassengerDateTime(world.updatedAt)}</span>
       </div>
       <div className="line-status-grid">
         {network.lines.map((line) => {
@@ -158,9 +158,10 @@ function JourneyPlanner({
       <div className="journey-planner-intro">
         <h2>Where are you going?</h2>
         <p>Find a route, check travel times and avoid stairs if you need to.</p>
+        <p>Times shown in your local time.</p>
         <div className="planner-time-callout">
           <span>Leave now at</span>
-          <strong>{formatClock(world.simTime)}</strong>
+          <strong>{formatPassengerDateTime(world.simTime)}</strong>
         </div>
       </div>
       <form className="journey-form" onSubmit={(event) => void submit(event)}>
@@ -189,7 +190,7 @@ function JourneyPlanner({
           </div>
           {when === "later" && (
             <label>
-              <span>Departure date and time ({timeZone})</span>
+              <span>Departure date and time</span>
               <input type="datetime-local" value={departureTime} onChange={(event) => setDepartureTime(event.target.value)} required aria-invalid={Boolean(error)} />
             </label>
           )}
@@ -204,7 +205,7 @@ function JourneyPlanner({
         {origin === destination && <div className="notice notice--warning">Choose two different stations.</div>}
         {error && <div className="notice notice--error" role="alert">{error}</div>}
       </form>
-      {result && <JourneyCards result={result} network={network} currentGeneration={world.generation} currentScenarioId={world.scenarioId} />}
+      {result && <JourneyCards passenger result={result} network={network} currentGeneration={world.generation} currentScenarioId={world.scenarioId} />}
     </section>
   );
 }
@@ -221,7 +222,7 @@ function AccessibilityPanel({ world, network, stale }: { world: WorldState; netw
         <span className="eyebrow">Step-free travel</span>
         <h2>Elevator and station access</h2>
         <p>Choose “Step-free trip” to avoid stairs.</p>
-        <small>Last updated {formatWallTimestamp(world.updatedAt)}</small>
+        <small>Last updated {formatPassengerDateTime(world.updatedAt)}</small>
       </div>
       <div className="accessibility-updates">
         {stale && <div className="notice notice--warning"><strong>Access status unavailable</strong><p>Updates are delayed. Check again before travelling.</p></div>}
@@ -332,6 +333,7 @@ function HomePage({
               )}
             </div>
             {selectedTrain ? <TrainFacts train={selectedTrain} network={network} stale={stale} /> : <StationBoardView
+              passenger
               board={board.data}
               network={network}
               scenarioId={world.scenarioId}
@@ -409,7 +411,7 @@ function StationPage({
             {servingLines.map((line) => <span key={line.id} className={`line-pill line-pill--${line.id.toLowerCase()}`}>{line.name}</span>)}
           </div>
         </div>
-        <div className="station-page-updated"><span>Travel date and time</span><strong>{formatClock(world.simTime)}</strong><small>Last updated {relativeFreshness(world.updatedAt)}</small></div>
+        <div className="station-page-updated"><span>Travel date and time</span><strong><time dateTime={world.simTime}>{formatPassengerDateTime(world.simTime)}</time></strong><small>Last updated <time dateTime={world.updatedAt}>{formatPassengerDateTime(world.updatedAt)}</time></small></div>
       </section>
       {stationIncidents.length > 0 && (
         <section className="station-alert-banner">
@@ -424,6 +426,7 @@ function StationPage({
         <div className="station-board-card">
           <div className="section-heading"><div><span className="eyebrow">Next trains</span><h2>Arrivals</h2></div></div>
           <StationBoardView
+            passenger
             board={board.data}
             network={network}
             scenarioId={world.scenarioId}
@@ -501,7 +504,7 @@ export function PassengerApp() {
       <PassengerHeader onNavigate={navigate} simulatedTime={world.simTime} stale={stale} />
       {stale && (
         <div className="public-data-warning">
-          Service updates are delayed. Last updated {formatWallTimestamp(world.updatedAt)}. Check again before travelling.
+          Service updates are delayed. Last updated {formatPassengerDateTime(world.updatedAt)}. Check again before travelling.
         </div>
       )}
       {stationMatch ? (

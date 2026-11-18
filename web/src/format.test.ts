@@ -1,5 +1,12 @@
 import { expect, it } from "vitest";
-import { formatDateTimeLocal, formatSimTimestamp, parseSimulatedLocalInput } from "./format";
+import { formatDateTimeLocal, formatPassengerDateTime, formatSimTimestamp, parseSimulatedLocalInput } from "./format";
+
+it("shows a friendly rider date in the local zone across midnight, without zone suffixes", () => {
+  const instant = "2026-11-18T00:59:00Z";
+  expect(formatPassengerDateTime(instant, "Europe/Lisbon", "en-US")).toBe("Wednesday, November 18 at 12:59 AM");
+  expect(formatPassengerDateTime(instant, "America/Los_Angeles", "en-US")).toBe("Tuesday, November 17 at 4:59 PM");
+  expect(formatPassengerDateTime(instant, "Europe/Lisbon", "fr-FR")).toContain("mercredi 18 novembre");
+});
 
 it("shows simulation instants in the viewer's zone, including its label", () => {
   const label = formatSimTimestamp("2026-11-17T11:34:24Z", "America/New_York");
