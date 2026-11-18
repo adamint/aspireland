@@ -93,12 +93,22 @@ var ai = builder.AddDotnetProject("ai-operations", "src/MetroOps.AiHost/MetroOps
 if (builder.Configuration.GetValue("MetroOps:ProvisionFoundry", false))
 {
     var foundry = builder.AddFoundry("aspireland-foundry");
-    var chat = foundry.AddDeployment("chat", FoundryModel.OpenAI.Gpt41);
-    var transcription = foundry.AddDeployment("transcription", FoundryModel.OpenAI.Gpt4oMiniTranscribe);
-    var speech = foundry.AddDeployment("speech", FoundryModel.OpenAI.Tts);
+    var chat = foundry.AddDeployment("chat", FoundryModel.OpenAI.Gpt5Mini)
+        .WithProperties(deployment => deployment.SkuName = "GlobalStandard");
+    var transcription = foundry.AddDeployment("transcription", FoundryModel.OpenAI.Gpt4oMiniTranscribe)
+        .WithProperties(deployment => deployment.SkuName = "GlobalStandard");
+    var speech = foundry.AddDeployment("speech", FoundryModel.OpenAI.Tts)
+        .WithProperties(deployment => deployment.SkuName = "Standard");
     ai.WithReference(chat).WithReference(transcription).WithReference(speech)
         .WithEnvironment("AZURE_TENANT_ID", builder.Configuration["Azure:TenantId"])
         .WaitFor(foundry);
+}
+else
+{
+    foreach (var connection in new[] { "chat", "transcription", "speech" })
+        if (!string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString(connection)))
+            ai.WithReference(builder.AddConnectionString(connection));
+    ai.WithEnvironment("AZURE_TENANT_ID", builder.Configuration["Azure:TenantId"]);
 }
 
 var operations = builder.AddDotnetProject("operations-api", "src/MetroOps.OperationsApi/MetroOps.OperationsApi.csproj")
