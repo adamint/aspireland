@@ -3,11 +3,15 @@ from __future__ import annotations
 import unittest
 import http.client
 import json
+import socket
 import threading
+from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
+from python.demand import main as demand_main
 from python.demand.generator import (
     KeyedRandom,
     STATION_BY_ID,
@@ -216,6 +220,23 @@ class DemandTests(unittest.TestCase):
                     "to": "2026-11-17T01:00:00",
                 }
             )
+
+    def test_listener_accepts_forecast_burst_before_dispatch(self) -> None:
+        def connect_forecasts(server: ThreadingHTTPServer) -> None:
+            with ExitStack() as pending:
+                pending.callback(server.server_close)
+                for index in range(9):
+                    try:
+                        pending.enter_context(socket.create_connection(
+                            ("127.0.0.1", server.server_address[1]), timeout=1
+                        ))
+                    except OSError as exc:
+                        self.fail(f"Forecast burst connection {index + 1} was refused: {exc}")
+
+        with patch.object(demand_main, "_port", return_value=0), patch.object(
+            ThreadingHTTPServer, "serve_forever", connect_forecasts
+        ):
+            demand_main.main()
 
     def test_http_endpoint_accepts_bounded_chunked_json(self) -> None:
         quiet_handler = type(

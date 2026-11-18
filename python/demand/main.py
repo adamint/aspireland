@@ -12,6 +12,11 @@ except ImportError:
 MAX_BODY = 64 * 1024
 
 
+class DemandServer(ThreadingHTTPServer):
+    # Eight forecast futures arrive alongside live polling and health checks.
+    request_queue_size = 32
+
+
 class DemandHandler(BaseHTTPRequestHandler):
     server_version = "MetroOpsDemand/1.0"
 
@@ -114,7 +119,7 @@ def _port() -> int:
 
 
 def main() -> None:
-    server = ThreadingHTTPServer(("0.0.0.0", _port()), DemandHandler)
+    server = DemandServer(("0.0.0.0", _port()), DemandHandler)
     print(f"demand listening on {server.server_address[1]}")
     server.serve_forever()
 
