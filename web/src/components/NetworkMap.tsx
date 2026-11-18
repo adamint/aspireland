@@ -803,10 +803,9 @@ export function NetworkMap({
         </div>
       </div>
 
-      {calm && <div className="porto-map-trim" aria-hidden="true" />}
-
-      <details className="station-directory">
-        <summary>{calm ? "Find a station" : "Station directory and keyboard-accessible map alternative"}</summary>
+      <details className={calm ? "station-directory map-directory" : "station-directory"}>
+        <summary>{calm ? "Browse map as a list" : "Station directory and keyboard-accessible map alternative"}</summary>
+        {calm && <h3>Stations</h3>}
         <div className="station-directory-grid">
           {network.stations.map((station) => (
             <button
@@ -820,28 +819,27 @@ export function NetworkMap({
             </button>
           ))}
         </div>
+        {calm && onSelectTrain && (
+          <div className="train-directory">
+            <h3>Trains</h3>
+            <ul className="station-directory-grid" aria-label="Trains">
+              {directoryTrains.map((train) => (
+                <li key={train.id}>
+                  <button
+                    className={train.id === selectedTrainId ? "selected" : ""}
+                    aria-pressed={train.id === selectedTrainId}
+                    onClick={() => onSelectTrain(train.id)}
+                  >
+                    <span>{publicTrainLabel(train, network)}</span>{" "}
+                    <small>{publicTrainStatus(train.state)} · Onboard crowding: {publicOnboardCrowding(train.load, train.capacity, stale).label}. {publicOnboardCrowding(train.load, train.capacity, stale).detail}</small>
+                  </button>
+                </li>
+              ))}
+              {directoryTrains.length === 0 && <li className="empty-state">No trains in service reported.</li>}
+            </ul>
+          </div>
+        )}
       </details>
-
-      {calm && onSelectTrain && (
-        <details className="station-directory train-directory">
-          <summary>Find a train</summary>
-          <ul className="station-directory-grid" aria-label="Trains">
-            {directoryTrains.map((train) => (
-              <li key={train.id}>
-                <button
-                  className={train.id === selectedTrainId ? "selected" : ""}
-                  aria-pressed={train.id === selectedTrainId}
-                  onClick={() => onSelectTrain(train.id)}
-                >
-                  <span>{publicTrainLabel(train, network)}</span>{" "}
-                  <small>{publicTrainStatus(train.state)} · Onboard crowding: {publicOnboardCrowding(train.load, train.capacity, stale).label}. {publicOnboardCrowding(train.load, train.capacity, stale).detail}</small>
-                </button>
-              </li>
-            ))}
-            {directoryTrains.length === 0 && <li className="empty-state">No trains in service reported.</li>}
-          </ul>
-        </details>
-      )}
     </section>
   );
 }

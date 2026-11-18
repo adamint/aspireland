@@ -86,16 +86,24 @@ it("keeps passenger train targets below stations and captures moving-marker taps
   expect(onSelectTrain).toHaveBeenCalledTimes(1);
 });
 
-it("offers a stable train directory with keyboard activation and current selection", () => {
+it("offers one rider map list with selectable stations and trains in stable order", () => {
   const onSelectTrain = vi.fn();
+  const onSelectStation = vi.fn();
   const trains = [train, { ...train, id: "blue-2" }];
-  const props = { network, world: { ...world, trains }, selectedTrainId: "blue-2", onSelectTrain, onSelectStation: vi.fn(), calm: true };
+  const props = { network, world: { ...world, trains }, selectedTrainId: "blue-2", onSelectTrain, onSelectStation, calm: true };
   const view = render(<NetworkMap {...props} />);
-  const summary = view.getByText("Find a train");
+  const summary = view.getByText("Browse map as a list");
   const directory = summary.closest("details")!;
+  expect(view.container.querySelectorAll("details")).toHaveLength(1);
+  expect(directory.open).toBe(false);
   fireEvent.click(summary);
-  expect(within(directory).getByRole("list")).toBeTruthy();
-  const buttons = within(directory).getAllByRole("button");
+  expect(within(directory).getByRole("heading", { name: "Stations" })).toBeTruthy();
+  expect(within(directory).getByRole("heading", { name: "Trains" })).toBeTruthy();
+  const station = within(directory).getByRole("button", { name: /^One/ });
+  fireEvent.click(station);
+  expect(onSelectStation).toHaveBeenCalledExactlyOnceWith("one");
+  const trainList = within(directory).getByRole("list", { name: "Trains" });
+  const buttons = within(trainList).getAllByRole("button");
   expect(buttons.map((button) => button.textContent)).toEqual([
     expect.stringContaining("Blue, next stop Two"),
     expect.stringContaining("Blue, next stop Two"),
@@ -107,12 +115,15 @@ it("offers a stable train directory with keyboard activation and current selecti
   buttons[1].focus();
 
   view.rerender(<NetworkMap {...props} world={{ ...world, version: 2, trains: [...trains].reverse() }} />);
-  expect(within(directory).getAllByRole("button")).toEqual(buttons);
+  expect(within(trainList).getAllByRole("button")).toEqual(buttons);
   expect(document.activeElement).toBe(buttons[1]);
-  const marker = view.container.querySelector(".map-train")!;
+  const map = within(view.getByRole("group", { name: /Interactive Aspireland metro map/ }));
+  const marker = map.getByRole("button", { name: /^blue-1,/ });
   fireEvent.keyDown(marker, { key: " " });
   expect(onSelectTrain).toHaveBeenLastCalledWith("blue-1");
-  expect(within(view.getByRole("group", { name: /Interactive Aspireland metro map/ })).getByRole("button", { name: /^blue-2,/ }).getAttribute("aria-pressed")).toBe("true");
+  expect(map.getByRole("button", { name: /^blue-2,/ }).getAttribute("aria-pressed")).toBe("true");
+  fireEvent.keyDown(map.getByRole("button", { name: "Two station" }), { key: "Enter" });
+  expect(onSelectStation).toHaveBeenLastCalledWith("two");
 });
 
 it("uses plain colored passenger markers and hides out-of-service stock without changing Dispatch", () => {
@@ -123,25 +134,23 @@ it("uses plain colored passenger markers and hides out-of-service stock without 
   expect(view.container.querySelector(".map-train text")).toBeNull();
   expect(view.container.querySelector(".map-train .train-window")).toBeNull();
   expect(within(view.getByRole("group", { name: /Interactive Aspireland metro map/ })).getByRole("button", { name: /Blue, next stop Two/ })).toBeTruthy();
-  const directory = view.getByText("Find a train").closest("details")!;
+  const directory = view.getByText("Browse map as a list").closest("details")!;
   expect(directory.textContent).not.toMatch(/reserve|withdrawn/i);
   view.rerender(<NetworkMap {...props} />);
   expect(view.container.querySelectorAll(".map-train")).toHaveLength(3);
   expect(view.container.querySelector(".map-train text")?.textContent).toBe("blue-1");
 });
 
-it("keeps the Porto trim decorative and outside the interactive rider map", () => {
-  const props = { network, world, onSelectStation: vi.fn() };
-  const view = render(<NetworkMap {...props} calm />);
-  const trim = view.container.querySelector(".porto-map-trim");
-  expect(trim).not.toBeNull();
-  expect(trim?.getAttribute("aria-hidden")).toBe("true");
-  const map = view.getByRole("group", { name: /Interactive Aspireland metro map/ });
-  expect(map.contains(trim)).toBe(false);
-  expect(trim?.querySelector("button, a, [tabindex]")).toBeNull();
-
-  view.rerender(<NetworkMap {...props} />);
-  expect(view.container.querySelector(".porto-map-trim")).toBeNull();
+it("keeps Dispatch's station directory independent of the rider map list", () => {
+  const onSelectStation = vi.fn();
+  const view = render(<NetworkMap network={network} world={{ ...world, trains: [train] }} onSelectStation={onSelectStation} onSelectTrain={vi.fn()} />);
+  expect(view.queryByText("Browse map as a list")).toBeNull();
+  const summary = view.getByText("Station directory and keyboard-accessible map alternative");
+  fireEvent.click(summary);
+  const directory = within(summary.closest("details")!);
+  expect(directory.queryByRole("list", { name: "Trains" })).toBeNull();
+  fireEvent.click(directory.getByRole("button", { name: /^Two/ }));
+  expect(onSelectStation).toHaveBeenCalledExactlyOnceWith("two");
 });
 
 it("does not trap ordinary wheel scrolling and zooms through explicit controls", () => {

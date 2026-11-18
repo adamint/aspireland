@@ -148,6 +148,7 @@ html[data-site="passenger"], .passenger-app {
   background: transparent;
   padding: 20px clamp(20px, 5vw, 72px) 28px;
 }
+.journey-planner-section + .status-section { padding-top: 16px; }
 .journey-planner-intro h2 { font-size: 1.5rem; letter-spacing: -.03em; margin: 0 0 8px; }
 .journey-planner-intro p { margin: 0; color: var(--muted); font-size: .94rem; line-height: 1.45; }
 .planner-time-callout { display: grid; gap: 5px; border: 0; margin-top: 16px; padding: 0; }
@@ -169,7 +170,7 @@ html[data-site="passenger"], .passenger-app {
 .segmented--light { background: var(--cream); border-color: var(--control-border); }
 .segmented--light button { min-height: 44px; font-size: .86rem; color: var(--ink); background: var(--cream); border-color: var(--control-border); }
 .segmented--light button.active { background: var(--brand); color: var(--aspire-white); }
-.accessible-check { min-height: 44px; }
+.accessible-check { min-height: 44px; margin-left: 0; }
 .accessible-check input { accent-color: var(--brand); width: 20px; height: 20px; }
 .journey-options .public-primary-button { margin-left: auto; }
 .journey-form .notice { margin-top: 12px; }
@@ -261,16 +262,8 @@ html[data-site="passenger"], .passenger-app {
 .porto-postcard { margin-top: 4px; font-size: .8rem; }
 .porto-postcard summary { width: fit-content; min-height: 44px; padding: 12px 0; color: var(--brand); cursor: pointer; }
 .porto-postcard p { margin-top: 8px; color: var(--ink); }
-.porto-map-trim {
-  height: 10px;
-  flex: none;
-  border-block: 1px solid #c9d8e8;
-  background-color: #f7fbff;
-  background-image: linear-gradient(45deg, transparent 40%, #315f91 40% 60%, transparent 60%),
-    linear-gradient(-45deg, transparent 40%, #315f91 40% 60%, transparent 60%);
-  background-size: 16px 16px;
-  pointer-events: none;
-}
+.map-directory > summary { min-height: 44px; padding: 12px; }
+.map-directory h3 { margin: 0; padding: 8px 12px; color: var(--ink); font-size: .85rem; }
 .station-page-hero, .station-board-card, .station-info-card { background: var(--paper); border-color: var(--border); color: var(--ink); }
 .back-link, .board-preview-heading button { color: var(--brand); min-height: 44px; font-size: .85rem; }
 .board-preview-heading { border-color: var(--border); }
