@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <ItemGroup>
+    <ProjectReference Include="../MetroOps.ServiceDefaults/MetroOps.ServiceDefaults.csproj" />
+    <ProjectReference Include="../MetroOps.Domain/MetroOps.Domain.csproj" />
+  </ItemGroup>
+</Project>

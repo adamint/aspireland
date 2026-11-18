@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <ItemGroup>
+    <ProjectReference Include="../MetroOps.ServiceDefaults/MetroOps.ServiceDefaults.csproj" />
+    <ProjectReference Include="../MetroOps.Simulation.Persistence/MetroOps.Simulation.Persistence.csproj" />
+    <PackageReference Include="Aspire.RabbitMQ.Client" Version="13.6.5" />
+  </ItemGroup>
+</Project>

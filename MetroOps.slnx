@@ -1,0 +1,23 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MetroOps.AiHost/MetroOps.AiHost.csproj" />
+    <Project Path="src/MetroOps.Contracts/MetroOps.Contracts.csproj" />
+    <Project Path="src/MetroOps.Control/MetroOps.Control.csproj" />
+    <Project Path="src/MetroOps.Dispatch/MetroOps.Dispatch.csproj" />
+    <Project Path="src/MetroOps.Domain/MetroOps.Domain.csproj" />
+    <Project Path="src/MetroOps.Incidents/MetroOps.Incidents.csproj" />
+    <Project Path="src/MetroOps.Information/MetroOps.Information.csproj" />
+    <Project Path="src/MetroOps.OperationsApi/MetroOps.OperationsApi.csproj" />
+    <Project Path="src/MetroOps.PassengerApi/MetroOps.PassengerApi.csproj" />
+    <Project Path="src/MetroOps.Planner/MetroOps.Planner.csproj" />
+    <Project Path="src/MetroOps.PublicApi/MetroOps.PublicApi.csproj" />
+    <Project Path="src/MetroOps.Scenario/MetroOps.Scenario.csproj" />
+    <Project Path="src/MetroOps.ServiceDefaults/MetroOps.ServiceDefaults.csproj" />
+    <Project Path="src/MetroOps.Simulation.Persistence/MetroOps.Simulation.Persistence.csproj" />
+    <Project Path="src/MetroOps.TrainWorker/MetroOps.TrainWorker.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MetroOps.Domain.Tests/MetroOps.Domain.Tests.csproj" />
+    <Project Path="tests/MetroOps.Runtime.Tests/MetroOps.Runtime.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../MetroOps.Contracts/MetroOps.Contracts.csproj" />
+  </ItemGroup>
+</Project>

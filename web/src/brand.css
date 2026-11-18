@@ -1,0 +1,37 @@
+:root {
+  --aspire-primary: #7455DD;
+  --aspire-purple: #512BD4;
+  --aspire-secondary: #B9AAEE;
+  --aspire-muted: #DCD5F6;
+  --aspire-grey: #DCE0E8;
+  --aspire-black: #1F1E33;
+  --aspire-white: #FFFFFF;
+
+  --font-sans: "Poppins", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-data: var(--font-sans);
+  --ink: var(--aspire-black);
+  --muted: #5B586F;
+  --border: var(--aspire-grey);
+  --control-border: #847E9B;
+  --cream: #F7F6FB;
+  --paper: var(--aspire-white);
+  --brand: var(--aspire-purple);
+  --brand-mark: var(--aspire-primary);
+  --brand-tint: #F0ECFB;
+  --danger: #833A2E;
+  --red: #D25C62;
+  --warning: #E6A845;
+
+  /* Service identifiers are not brand accents. */
+  --blue: #4B8FF5;
+  --amber: #F0AC32;
+  --green: #46B887;
+  --ax: #BD88ED;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --sign-radius: 4px;
+}

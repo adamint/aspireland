@@ -1,0 +1,10 @@
+{
+	admin off
+	auto_https disable_redirects
+	skip_install_trust
+}
+
+{$METROOPS_DEMO_HOST} {
+	bind {$METROOPS_DEMO_BIND:0.0.0.0}
+	reverse_proxy 127.0.0.1:{$METROOPS_ATTENDEE_PORT:6173}
+}

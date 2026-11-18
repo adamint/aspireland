@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="../MetroOps.Domain/MetroOps.Domain.csproj" />
+    <PackageReference Include="Aspire.Npgsql" Version="13.6.5" />
+  </ItemGroup>
+</Project>
