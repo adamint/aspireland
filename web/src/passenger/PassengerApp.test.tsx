@@ -107,6 +107,20 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+it("announces loading in the main content area, then shows the trip planner", () => {
+  useWorld.mockReturnValue({ data: null, error: null, loading: true, lastSuccess: null, refresh: vi.fn() });
+  const view = render(<PassengerApp />);
+  const status = screen.getByRole("status");
+  expect(status.textContent).toBe("Loading service information…");
+  expect(screen.getByRole("main").contains(status)).toBe(true);
+  expect(screen.queryByRole("button", { name: "Find a route" })).toBeNull();
+
+  showWorld(baseWorld);
+  view.rerender(<PassengerApp />);
+  expect(screen.queryByRole("status")).toBeNull();
+  expect(screen.getByRole("button", { name: "Find a route" })).toBeTruthy();
+});
+
 it.each(["westhaven>old-town", "old-town>westhaven"])(
   "associates shared adjacent segment closure %s with both affected lines",
   (target) => {

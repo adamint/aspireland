@@ -35,14 +35,14 @@ function PassengerHeader({
   stale,
 }: {
   onNavigate: (path: string) => void;
-  simulatedTime: string;
-  stale: boolean;
+  simulatedTime?: string;
+  stale?: boolean;
 }) {
   return (
     <>
       <div className="public-sim-banner">
         <span>{stale ? "Updates delayed" : "Travel date and time"}</span>
-        <strong>{formatClock(simulatedTime)}</strong>
+        <strong>{simulatedTime ? formatClock(simulatedTime) : "Updating…"}</strong>
       </div>
       <header className="passenger-header">
         <button className="passenger-brand" onClick={() => onNavigate("/")} aria-label="Aspireland Transit home">
@@ -472,7 +472,16 @@ export function PassengerApp() {
   const { path, navigate } = usePath();
 
   if (worldState.loading && !worldState.data) {
-    return <main className="app-loading passenger-theme"><TransitBrand /><p>Loading live service…</p></main>;
+    return (
+      <div className="passenger-app">
+        <PassengerHeader onNavigate={navigate} />
+        <main>
+          <section className="passenger-hero page-loading">
+            <p role="status">Loading service information…</p>
+          </section>
+        </main>
+      </div>
+    );
   }
 
   if (!worldState.data) {

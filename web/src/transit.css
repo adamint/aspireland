@@ -60,6 +60,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 }
 html[data-site], .passenger-app { background: var(--cream); color: var(--ink); }
 .app-loading, .app-loading.passenger-theme { background: var(--cream); color: var(--ink); }
+.page-loading > p { margin: 0; color: var(--muted); line-height: 1.5; }
 .public-sim-banner {
   min-height: 34px;
   background: var(--ink);

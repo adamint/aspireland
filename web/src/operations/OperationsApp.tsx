@@ -310,7 +310,18 @@ export function OperationsApp() {
   );
 
   if (worldState.loading && !snapshot) {
-    return <main className="app-loading ops-theme"><TransitBrand /><p>Loading the dispatch desk…</p></main>;
+    return (
+      <div className="ops-app">
+        <header className="ops-topbar">
+          <div className="ops-brand"><TransitBrand /></div>
+        </header>
+        <main>
+          <section className="dispatch-section page-loading">
+            <p role="status">Loading the dispatch desk…</p>
+          </section>
+        </main>
+      </div>
+    );
   }
 
   if (!snapshot) {
