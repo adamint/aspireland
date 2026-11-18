@@ -121,6 +121,21 @@ it("announces loading in the main content area, then shows the trip planner", ()
   expect(screen.getByRole("button", { name: "Find a route" })).toBeTruthy();
 });
 
+it.each([false, true])("keeps trip help independent of transcription availability (%s)", (transcription) => {
+  useCapabilities.mockReturnValue({
+    data: { text: true, transcription, speech: true },
+    error: null,
+    loading: false,
+    lastSuccess: new Date(),
+  });
+
+  render(<PassengerApp />);
+
+  expect(screen.getByRole("heading", { name: "Signal" })).toBeTruthy();
+  expect(screen.getByText("Type a question about routes or arrivals.")).toBeTruthy();
+  expect(screen.queryByText(/Push to talk/i)).toBeNull();
+});
+
 it.each(["westhaven>old-town", "old-town>westhaven"])(
   "associates shared adjacent segment closure %s with both affected lines",
   (target) => {

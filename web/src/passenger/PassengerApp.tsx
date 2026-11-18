@@ -355,7 +355,7 @@ function HomePage({
           <span className="eyebrow">Trip help</span>
           <h2>Ask about your trip</h2>
           <p>{capabilities?.text
-            ? capabilities.transcription ? "Type a question, or choose “Push to talk” to record it. Check the words before sending." : "Type a question about routes or arrivals."
+            ? "Type a question about routes or arrivals."
             : "Use the trip planner to find a route, or choose a station for arrival times."}</p>
         </div>
         <AssistantPanel
