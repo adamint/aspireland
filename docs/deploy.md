@@ -174,6 +174,9 @@ against the same database. Keep both the existing volume name and its actual
 PostgreSQL password: a new isolated checkout generates different user secrets.
 Supply the retained password privately through `Parameters__postgres-password`
 and the volume through `MetroOps__PostgresVolume`; don't put either in Git or logs.
+Preserve the application credentials through `Parameters__service-key`,
+`Parameters__worker-key`, `Parameters__operator-key` and `Parameters__agent-key`.
+Their factories read these configured values before generating fresh defaults.
 Keep `MetroOps__ProvisionFoundry=false` unless a separate cloud change is approved.
 Aspire 17 currently selects PostgreSQL 18.6 rather than the earlier 18.3 image;
 both use major version 18, but keep the backup for rollback.

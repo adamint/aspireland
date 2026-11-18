@@ -31,13 +31,13 @@ const string demoCommandClient = "demo-read";
 builder.Services.AddHttpClient(demoCommandClient, client => client.Timeout = TimeSpan.FromSeconds(5));
 
 var serviceKey = builder.AddParameter("service-key",
-    () => Convert.ToHexString(RandomNumberGenerator.GetBytes(32)), secret: true);
+    () => builder.Configuration["Parameters:service-key"] ?? Convert.ToHexString(RandomNumberGenerator.GetBytes(32)), secret: true);
 var workerKey = builder.AddParameter("worker-key",
-    () => Convert.ToHexString(RandomNumberGenerator.GetBytes(32)), secret: true);
+    () => builder.Configuration["Parameters:worker-key"] ?? Convert.ToHexString(RandomNumberGenerator.GetBytes(32)), secret: true);
 var operatorKey = builder.AddParameter("operator-key",
-    () => Convert.ToHexString(RandomNumberGenerator.GetBytes(32)), secret: true);
+    () => builder.Configuration["Parameters:operator-key"] ?? Convert.ToHexString(RandomNumberGenerator.GetBytes(32)), secret: true);
 var agentKey = builder.AddParameter("agent-key",
-    () => Convert.ToHexString(RandomNumberGenerator.GetBytes(32)), secret: true);
+    () => builder.Configuration["Parameters:agent-key"] ?? Convert.ToHexString(RandomNumberGenerator.GetBytes(32)), secret: true);
 
 var postgres = builder.AddPostgres("postgres")
     .WithDataVolume(builder.Configuration["MetroOps:PostgresVolume"] ?? "aspireland-metroops-postgres");
