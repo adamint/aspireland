@@ -209,8 +209,10 @@ internal abstract class AssistantToolRegistry
             }
             case "plan_journey":
             {
-                var originText = OptionalString(arguments, "origin") ?? capture.JourneyContext?.Origin;
-                var destinationText = OptionalString(arguments, "destination") ?? capture.JourneyContext?.Destination;
+                var suppliedOrigin = OptionalString(arguments, "origin");
+                var suppliedDestination = OptionalString(arguments, "destination");
+                var originText = suppliedOrigin ?? capture.JourneyContext?.Origin;
+                var destinationText = suppliedDestination ?? capture.JourneyContext?.Destination;
                 if (string.IsNullOrWhiteSpace(originText) || string.IsNullOrWhiteSpace(destinationText))
                 {
                     return SerializeError("Origin and destination are required. Resolve ambiguous station names before planning.");
@@ -230,7 +232,9 @@ internal abstract class AssistantToolRegistry
                 }
 
                 var askReturnTime = IsPassenger && OptionalBool(arguments, "askReturnTime") == true;
-                var request = BuildJourneyRequest(arguments, capture.JourneyContext, origin.Station.Id, destination.Station.Id);
+                var context = IsPassenger && suppliedOrigin is not null && suppliedDestination is not null
+                    ? null : capture.JourneyContext;
+                var request = BuildJourneyRequest(arguments, context, origin.Station.Id, destination.Station.Id);
                 var journey = await Services.PostAsync<JourneyRequest, JourneyResult>(
                     "planner",
                     "journeys",
@@ -563,7 +567,7 @@ internal static class ToolDefinitions
         """);
     private static readonly AssistantToolDefinition PlanPassengerJourney = Define(
         "plan_journey",
-        "Plan a real journey. Origin or destination may be omitted only when available in the prior journey context.",
+        "Plan a real journey. Pass supplied station names as written; this tool resolves them. A new trip with both stations and no departure time leaves now. Omit a station only when reusing the prior journey context.",
         """
         {"type":"object","properties":{"origin":{"type":"string"},"destination":{"type":"string"},"accessible":{"type":"boolean"},"departureTime":{"type":"string","description":"ISO 8601 simulated departure time"},"askReturnTime":{"type":"boolean","description":"True for the outbound leg of a round trip when the rider has not given a return time."}},"additionalProperties":false}
         """);

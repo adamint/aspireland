@@ -99,6 +99,8 @@ failures stay visible rather than becoming fabricated answers.
 
 Try “What's the fastest accessible route from University to the airport?” on
 the passenger site, or “Why are Central Exchange queues growing?” in Dispatch.
+For a new trip, Signal plans to leave now unless you give it a departure time.
+For a round trip without a return time, it gives you the outbound route first.
 Signal replies in text. On the private passenger site, tap the microphone to
 start recording and tap again to stop. The transcript goes into the draft so
 you can edit it before sending.

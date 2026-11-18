@@ -52,9 +52,10 @@ public sealed class AiTransportTests
     }
 
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task SignalPlansBothRoundTripDirectionsOrAsksForReturnTime(bool returnTimeKnown)
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    public async Task SignalPlansBothRoundTripDirectionsOrAsksForReturnTime(bool returnTimeKnown, bool hasPreviousTrip)
     {
         const string question = "can u helpme plan round trip journey from airport to centtral exchange";
         const string departure = "2026-11-18T16:30:00+00:00";
@@ -81,7 +82,13 @@ public sealed class AiTransportTests
                     tool => tool.GetProperty("name").GetString() == "plan_journey");
                 Assert.Equal("boolean", planner.GetProperty("parameters").GetProperty("properties")
                     .GetProperty("askReturnTime").GetProperty("type").GetString());
-                Assert.Contains("Never guess a return time", json.RootElement.GetProperty("instructions").GetString());
+                var instructions = json.RootElement.GetProperty("instructions").GetString();
+                Assert.Contains("Call plan_journey first with those station names as written", instructions);
+                Assert.Contains("Only ask about supplied names if plan_journey reports ambiguity or no match", instructions);
+                Assert.Contains("omit departureTime to leave now", instructions);
+                Assert.Contains("Step-free travel is optional unless requested", instructions);
+                Assert.Contains("call plan_journey once for the outbound with askReturnTime set to true", instructions);
+                Assert.Contains("Never guess a return time", instructions);
             }
             return JsonResponse(modelResponses.Dequeue());
         }));
@@ -104,7 +111,10 @@ public sealed class AiTransportTests
         var prompt = AiEndpoints.BuildSystemPrompt("passenger", null, TimeZoneInfo.Utc);
         var tools = new PassengerToolRegistry(new ProposalStore(), new ServiceJsonClient(serviceHttp));
         var result = await Client(modelHttp).CompleteAsync(
-            new AssistantRequest(question, History: returnTimeKnown ? [new("user", $"I'd like to return at {departure}.")] : null),
+            new AssistantRequest(question, History: returnTimeKnown ? [new("user", $"I'd like to return at {departure}.")] : null,
+                JourneyContext: hasPreviousTrip
+                    ? new("university", "southbank", Accessible: true, DepartureTime: DateTimeOffset.Parse(departure))
+                    : null),
             prompt, tools, CancellationToken.None);
 
         Assert.NotEmpty(requests);
