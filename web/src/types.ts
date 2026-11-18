@@ -328,6 +328,7 @@ export interface AiCapabilities {
   text: boolean;
   transcription: boolean;
   speech: boolean;
+  sharedChat?: boolean;
   provider: string;
   reason?: string | null;
 }

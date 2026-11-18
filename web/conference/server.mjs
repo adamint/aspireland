@@ -9,6 +9,10 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const webRoot = path.dirname(here);
 const defaultDist = path.join(here, "dist");
 const stationPattern = /^[a-z][a-z0-9-]{0,63}$/;
+const unavailableChat = "Trip chat and voice are not available on this shared site. Use the trip planner.";
+const maxChatBytes = 64 * 1024;
+const chatMinuteMs = 60_000;
+const chatRunLimit = 120;
 const mimeTypes = {
   ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml",
@@ -60,9 +64,63 @@ const pick = (shape) => (value) => {
   return Object.fromEntries(Object.entries(shape).map(([key, validate]) => [key, validate(value[key])]));
 };
 
-const requestShape = pick({
+const journeyFields = {
   origin: stationId, destination: stationId, accessible: bool, departureTime: nullable(date),
+};
+const requestShape = pick(journeyFields);
+const chatContext = pick({
+  ...journeyFields,
+  departureTime: nullable((value) => {
+    date(value);
+    const day = value.slice(0, 10);
+    const utcYear = new Date(value).getUTCFullYear();
+    const offset = /[+-](\d\d):(\d\d)$/.exec(value);
+    check(!day.startsWith("0000") && new Date(`${day}T00:00:00Z`).toISOString().startsWith(day) &&
+      Number(value.slice(11, 13)) < 24 && utcYear >= 1 && utcYear <= 9999 &&
+      (!offset || Number(offset[1]) * 60 + Number(offset[2]) <= 14 * 60));
+    return value;
+  }),
 });
+const chatText = (value) => {
+  check(typeof value === "string" && value.length <= 8000 && value.trim().length > 0);
+  return value;
+};
+const chatResponse = pick({ text: chatText, journeyContext: nullable(chatContext) });
+
+function projectChatRequest(body) {
+  const exact = (value, keys) => {
+    check(value && typeof value === "object" && !Array.isArray(value) &&
+      Object.keys(value).every((key) => keys.includes(key)));
+  };
+  try {
+    exact(body, ["message", "history", "journeyContext", "viewerTimeZone"]);
+    const message = chatText(body.message);
+    const history = nullable(list((entry) => {
+      exact(entry, ["role", "content"]);
+      check(entry.role === "user" || entry.role === "assistant");
+      return { role: entry.role, content: chatText(entry.content) };
+    }, 20))(body.history);
+    check((history ?? []).reduce((total, entry) => total + entry.content.length, message.length) <= 32_000);
+    let journeyContext = null;
+    if (body.journeyContext != null) {
+      exact(body.journeyContext, ["origin", "destination", "accessible", "departureTime"]);
+      journeyContext = chatContext(body.journeyContext);
+    }
+    const viewerTimeZone = body.viewerTimeZone ?? null;
+    if (viewerTimeZone !== null) {
+      check(typeof viewerTimeZone === "string" && viewerTimeZone.length <= 100 &&
+        /^[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+)*$/.test(viewerTimeZone));
+      new Intl.DateTimeFormat("en", { timeZone: viewerTimeZone });
+    }
+    const request = JSON.stringify({ message, history, journeyContext, viewerTimeZone });
+    if (Buffer.byteLength(request) > maxChatBytes) throw new HttpError(413, "Request body is too large.");
+    return request;
+  } catch (error) {
+    if (error instanceof HttpError && error.status === 413) throw error;
+    throw new HttpError(400, "Invalid Signal chat request.");
+  }
+}
+
 const arrivalShape = pick({
   trainId: shortText, line: shortText, service: shortText, platform: shortText,
   destination: stationId, seconds: nullable(number), predictionKind: shortText, status: shortText,
@@ -164,7 +222,10 @@ export function readConfig(args = [], env = process.env) {
   }
   const port = values["--port"] ?? env.CONFERENCE_PORT ?? "6173";
   if (!/^[1-9]\d{0,4}$/.test(port) || Number(port) > 65535) throw new Error("Conference port must be an integer from 1 to 65535.");
-  return { port: Number(port), upstream: parseUpstream(values["--upstream"] ?? env.PASSENGER_API_URL) };
+  return {
+    port: Number(port), upstream: parseUpstream(values["--upstream"] ?? env.PASSENGER_API_URL),
+    signalChat: env.CONFERENCE_SIGNAL_CHAT === "true",
+  };
 }
 
 async function loadAssets(distDir) {
@@ -250,7 +311,8 @@ function readBody(req, maxBytes, timeoutMs) {
 export async function createPassengerServer({
   upstream, distDir = defaultDist, cacheMs = 2000, maxUpstreamRequests = 4,
   maxActiveRequests = 32, upstreamTimeoutMs = 8000, bodyTimeoutMs = 3000,
-  maxResponseBytes = 32 * 1024 * 1024,
+  maxResponseBytes = 32 * 1024 * 1024, signalChat = false,
+  assistantTimeoutMs = 90_000, assistantNow = () => performance.now(),
 }) {
   upstream = parseUpstream(upstream);
   const assets = await loadAssets(distDir);
@@ -259,59 +321,106 @@ export async function createPassengerServer({
   let activeRequests = 0;
   const cache = new Map();
 
+  function readPassenger(target, body, project, transport, timeoutMs, responseBytes) {
+    return new Promise((resolve, reject) => {
+      let response;
+      let done = false;
+      let timer;
+      const finish = (error, value) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        if (error) {
+          request.destroy();
+          response?.destroy();
+          reject(error instanceof HttpError ? error : new HttpError(502, "Passenger service is unavailable."));
+        } else resolve(value);
+      };
+      const request = http.request(`${upstream}${target}`, {
+        agent: transport, method: body === undefined ? "GET" : "POST",
+        headers: {
+          Accept: "application/json",
+          ...(body === undefined ? {} : { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) }),
+        },
+      }, (res) => {
+        response = res;
+        if (res.statusCode !== 200 || !/^application\/json(?:\s*;|$)/i.test(res.headers["content-type"] ?? "") ||
+            Number(res.headers["content-length"]) > responseBytes) {
+          finish(new HttpError(502, "Passenger service returned an invalid response."));
+          return;
+        }
+        const chunks = [];
+        let size = 0;
+        res.on("data", (chunk) => {
+          size += chunk.length;
+          if (size > responseBytes) finish(new HttpError(502, "Passenger service response exceeded its limit."));
+          else chunks.push(chunk);
+        });
+        res.once("error", (error) => finish(error));
+        res.once("aborted", () => finish(new HttpError(502, "Passenger service response was incomplete.")));
+        res.once("end", () => {
+          if (done) return;
+          try {
+            const data = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)));
+            finish(null, project(data));
+          } catch { finish(new HttpError(502, "Passenger service returned invalid data.")); }
+        });
+      });
+      request.once("error", (error) => finish(error));
+      timer = setTimeout(() => finish(new HttpError(504, "Passenger service timed out.")), timeoutMs);
+      request.end(body);
+    });
+  }
+
   async function upstreamRead(target, body, project) {
     if (upstreamRequests >= maxUpstreamRequests) throw new HttpError(503, "Passenger service is busy. Try again shortly.");
     upstreamRequests++;
     try {
-      return await new Promise((resolve, reject) => {
-        let response;
-        let done = false;
-        let timer;
-        const finish = (error, value) => {
-          if (done) return;
-          done = true;
-          clearTimeout(timer);
-          if (error) {
-            request.destroy();
-            response?.destroy();
-            reject(error instanceof HttpError ? error : new HttpError(502, "Passenger service is unavailable."));
-          } else resolve(value);
-        };
-        const request = http.request(`${upstream}${target}`, {
-          agent, method: body === undefined ? "GET" : "POST",
-          headers: {
-            Accept: "application/json",
-            ...(body === undefined ? {} : { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) }),
-          },
-        }, (res) => {
-          response = res;
-          if (res.statusCode !== 200 || !/^application\/json(?:\s*;|$)/i.test(res.headers["content-type"] ?? "") ||
-              Number(res.headers["content-length"]) > maxResponseBytes) {
-            finish(new HttpError(502, "Passenger service returned an invalid response."));
-            return;
-          }
-          const chunks = [];
-          let size = 0;
-          res.on("data", (chunk) => {
-            size += chunk.length;
-            if (size > maxResponseBytes) finish(new HttpError(502, "Passenger service response exceeded its limit."));
-            else chunks.push(chunk);
-          });
-          res.once("error", (error) => finish(error));
-          res.once("aborted", () => finish(new HttpError(502, "Passenger service response was incomplete.")));
-          res.once("end", () => {
-            if (done) return;
-            try {
-              const data = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)));
-              finish(null, project(data));
-            } catch { finish(new HttpError(502, "Passenger service returned invalid data.")); }
-          });
-        });
-        request.once("error", (error) => finish(error));
-        timer = setTimeout(() => finish(new HttpError(504, "Passenger service timed out.")), upstreamTimeoutMs);
-        request.end(body);
-      });
+      return await readPassenger(target, body, project, agent, upstreamTimeoutMs, maxResponseBytes);
     } finally { upstreamRequests--; }
+  }
+
+  const chatAgent = signalChat === true ? new http.Agent({ keepAlive: true, maxSockets: 1, maxFreeSockets: 1 }) : null;
+  let chatAvailable = false;
+  if (chatAgent) {
+    // Probe once, before listening. This is configuration, not an inference or readiness check.
+    chatAvailable = await readPassenger("/api/capabilities", undefined, (data) => data?.text === true,
+      chatAgent, upstreamTimeoutMs, maxChatBytes).catch((error) => {
+      if (!(error instanceof HttpError)) throw error;
+      console.warn("Signal is off: couldn't verify the Passenger API text capability at startup.");
+      return false;
+    });
+  }
+  let chatBusy = false;
+  let chatTurns = 0;
+  const chatStarts = [];
+
+  async function answerChat(req, res) {
+    if (chatTurns >= chatRunLimit) throw new HttpError(429, "Signal has reached its limit for this demo. Use the trip planner.");
+    if (chatBusy) throw new HttpError(429, "Signal is answering another question. Try again shortly.");
+    const now = assistantNow();
+    while (chatStarts.length && now - chatStarts[0] >= chatMinuteMs) chatStarts.shift();
+    if (chatStarts.length >= 2) {
+      const retry = Math.ceil((chatMinuteMs - (now - chatStarts[0])) / 1000);
+      res.setHeader("Retry-After", String(retry));
+      throw new HttpError(429, `Signal is at its shared limit. Try again in ${retry} second${retry === 1 ? "" : "s"}.`);
+    }
+    chatBusy = true;
+    try {
+      const request = projectChatRequest(await readBody(req, maxChatBytes, bodyTimeoutMs));
+      chatTurns++;
+      chatStarts.push(assistantNow());
+      // The usual socket idle timeout is shorter than the bounded model/tool round trip.
+      res.setTimeout(assistantTimeoutMs + 1000);
+      try {
+        return await readPassenger("/api/assistant", request, chatResponse, chatAgent, assistantTimeoutMs, maxChatBytes);
+      } catch (error) {
+        if (error instanceof HttpError && error.status === 504) {
+          throw new HttpError(504, "Signal timed out. Use the trip planner or try again.");
+        }
+        throw new HttpError(502, "Signal could not answer. Use the trip planner or try again.");
+      }
+    } finally { chatBusy = false; }
   }
 
   function cachedRead(target, project) {
@@ -356,11 +465,14 @@ export async function createPassengerServer({
       res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
       res.end(JSON.stringify(data));
     };
-    if (activeRequests >= maxActiveRequests) { json(503, { error: "Passenger service is busy. Try again shortly." }); return; }
-    activeRequests++;
-    let released = false;
-    const release = () => { if (!released) { released = true; activeRequests--; } };
-    res.once("close", release).once("finish", release);
+    const isChat = chatAvailable && req.method === "POST" && req.url === "/api/assistant";
+    if (!isChat) {
+      if (activeRequests >= maxActiveRequests) { json(503, { error: "Passenger service is busy. Try again shortly." }); return; }
+      activeRequests++;
+      let released = false;
+      const release = () => { if (!released) { released = true; activeRequests--; } };
+      res.once("close", release).once("finish", release);
+    }
     try {
       if (req.method === "POST" && req.headers["sec-fetch-site"] === "cross-site") throw new HttpError(403, "Cross-site requests are not allowed.");
       const target = req.url ?? "";
@@ -376,15 +488,18 @@ export async function createPassengerServer({
         res.setHeader("Allow", methods.join(", "));
         throw new HttpError(405, "Method not allowed.");
       }
-      if (ai) throw new HttpError(503, "Trip chat and voice are not available on this shared site. Use the trip planner.");
+      if (ai && !isChat) {
+        throw new HttpError(503, chatAvailable ? "Voice is not available on this shared site. Use Signal text chat." : unavailableChat);
+      }
       if (req.method !== "POST" && (req.headers["transfer-encoding"] || Number(req.headers["content-length"]) > 0)) {
         throw new HttpError(400, "This request must not have a body.");
       }
       if (target === "/api/capabilities") {
-        json(200, {
-          text: false, transcription: false, speech: false, provider: "disabled",
-          reason: "Trip chat and voice are not available on this shared site. Use the trip planner.",
-        });
+        json(200, chatAvailable
+          ? { text: true, transcription: false, speech: false, provider: "attendee", sharedChat: true }
+          : { text: false, transcription: false, speech: false, provider: "disabled", reason: unavailableChat });
+      } else if (isChat) {
+        json(200, await answerChat(req, res));
       } else if (target === "/api/world") {
         json(200, await worldRead());
       } else if (target === "/api/journeys") {
@@ -433,7 +548,7 @@ export async function createPassengerServer({
   server.maxRequestsPerSocket = 100;
   server.keepAliveTimeout = 5000;
   server.setTimeout(10_000, (socket) => socket.destroy());
-  server.once("close", () => agent.destroy());
+  server.once("close", () => { agent.destroy(); chatAgent?.destroy(); });
   return server;
 }
 
@@ -441,8 +556,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   try {
     if (process.argv.length === 3 && process.argv[2] === "--build") await buildPassenger();
     else {
-      const { port, upstream } = readConfig(process.argv.slice(2));
-      const server = await createPassengerServer({ upstream });
+      const { port, ...config } = readConfig(process.argv.slice(2));
+      const server = await createPassengerServer(config);
       server.once("error", (error) => { console.error(`Passenger origin could not listen (${error.code ?? "error"}).`); process.exitCode = 1; });
       server.listen(port, "127.0.0.1", () => console.log(`Passenger attendee origin: http://127.0.0.1:${port}`));
       for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => {

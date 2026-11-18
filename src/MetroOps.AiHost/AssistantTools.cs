@@ -23,7 +23,7 @@ internal sealed class AssistantCapture(JourneyRequest? journeyContext, TimeZoneI
     public string LocalTime(DateTimeOffset time) =>
         TimeZoneInfo.ConvertTime(time, ViewerTimeZone).ToString("yyyy-MM-dd HH:mm:ss zzz", CultureInfo.InvariantCulture);
 
-    public AssistantResponse BuildResponse(string text)
+    public AssistantResponse BuildResponse(string text, bool passenger = true)
     {
         if (Clarification is not null)
             return new AssistantResponse(Clarification, Tools: Tools, JourneyContext: JourneyContext);
@@ -34,6 +34,7 @@ internal sealed class AssistantCapture(JourneyRequest? journeyContext, TimeZoneI
             var station = Network.Station(Arrivals.StationId).Name;
             text = Arrivals.Stale
                 ? $"The {station} arrival board is out of date; arrival times are unavailable."
+                : passenger ? PassengerArrivals(Arrivals, station)
                 : $"Here is the {station} arrival board. Times belong to the simulation.";
         }
         if (Journey is not null && Comparison is null && Proposal is null)
@@ -43,15 +44,54 @@ internal sealed class AssistantCapture(JourneyRequest? journeyContext, TimeZoneI
                 var arrival = TimeZoneInfo.ConvertTime(itinerary.ArrivesAt, ViewerTimeZone)
                     .ToString("h:mm tt", CultureInfo.InvariantCulture);
                 var route = Journey.Request.Accessible ? "step-free route" : "route";
-                text = $"The {route} from {Network.Station(Journey.Request.Origin).Name} to {Network.Station(Journey.Request.Destination).Name} " +
-                    $"takes about {Math.Ceiling(itinerary.TotalSeconds / 60)} minutes, arriving at {arrival} ({ViewerTimeZone.Id}, simulated). " +
-                    $"The route card includes boarding waits and transfers.";
-                if (itinerary.Warnings.Count > 0) text += " Check the estimate warnings on the card.";
+                var duration = passenger ? TripMinutes(itinerary.TotalSeconds) : $"{Math.Ceiling(itinerary.TotalSeconds / 60)} minutes";
+                var summary = $"The {route} from {Network.Station(Journey.Request.Origin).Name} to {Network.Station(Journey.Request.Destination).Name} " +
+                    $"takes about {duration}, arriving at {arrival}";
+                text = passenger
+                    ? PassengerJourney(itinerary, $"{summary} ({ViewerTimeZone.Id}).")
+                    : $"{summary} ({ViewerTimeZone.Id}, simulated). The route card includes boarding waits and transfers.";
+                if (!passenger && itinerary.Warnings.Count > 0) text += " Check the estimate warnings on the card.";
             }
             else
                 text = Journey.Error ?? "No journey is currently available between those stations.";
         }
         return new AssistantResponse(text, Journey, Comparison, Proposal, Tools.Count > 0 ? Tools : null, JourneyContext, Arrivals);
+    }
+
+    private static string PassengerArrivals(StationBoard board, string station)
+    {
+        if (board.Arrivals.Count == 0) return $"No arrival times are available at {station}.";
+        var arrivals = board.Arrivals.Take(3).Select(arrival =>
+        {
+            var direction = arrival.Destination == board.StationId ? "terminating here"
+                : $"toward {Network.Station(arrival.Destination).Name}";
+            var eta = arrival.Seconds switch
+            {
+                null => "time unavailable",
+                0 => "due now",
+                var seconds => $"in about {TripMinutes(seconds.Value)}"
+            };
+            return $"- {Network.Line(arrival.Line).Name} {direction}: {eta}.";
+        });
+        return $"{station} arrivals:\n\n{string.Join('\n', arrivals)}";
+    }
+
+    private static string PassengerJourney(Itinerary itinerary, string summary)
+    {
+        var rides = itinerary.Legs.Where(leg => leg is { Kind: "ride", Line: not null }).Select(leg =>
+        {
+            var direction = leg.Destination is null ? "" : $" toward {Network.Station(leg.Destination).Name}";
+            var wait = leg.WaitSeconds > 0 ? $" (wait about {TripMinutes(leg.WaitSeconds)})" : "";
+            return $"- At {Network.Station(leg.From).Name}, take {Network.Line(leg.Line!).Name}{direction} to {Network.Station(leg.To).Name}{wait}.";
+        });
+        var details = rides.Concat(itinerary.Warnings.Distinct().Select(warning => $"- {warning}")).ToArray();
+        return details.Length == 0 ? summary : $"{summary}\n\n{string.Join('\n', details)}";
+    }
+
+    private static string TripMinutes(double seconds)
+    {
+        var minutes = Math.Ceiling(seconds / 60);
+        return minutes == 1 ? "1 minute" : $"{minutes} minutes";
     }
 }
 

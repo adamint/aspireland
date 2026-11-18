@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { AssistantPanel } from "./AssistantPanel";
-import type { NetworkDefinition, StationBoard } from "../types";
+import type { AssistantResponse, ComparisonResult, NetworkDefinition, StationBoard } from "../types";
 
 afterEach(() => {
   cleanup();
@@ -62,41 +62,130 @@ it("keeps assistant updates inside the conversation scroller", async () => {
   expect(HTMLElement.prototype.scrollTo).toHaveBeenCalled();
 });
 
-it("sends the viewer timezone and renders typed arrival tools with safe text and collapsed provenance", async () => {
-  const network: NetworkDefinition = {
-    stations: ["university", "southbank"].map((id) => ({
-      id, name: id === "university" ? "University" : "Southbank",
-      x: 0, y: 0, character: "campus", accessPerMinute: 100, platformCapacity: 100,
-      residential: 0, jobs: 0, education: 0, leisure: 0,
-    })),
-    lines: [], accessEdges: [],
-  };
-  const board: StationBoard = {
-    stationId: "university", scenarioId: "current", generation: 4,
-    asOf: "2026-11-17T11:34:24Z", updatedAt: "2026-11-17T11:34:24Z", stale: true, restrictions: [],
-    arrivals: [{ trainId: "green-1", line: "Green", service: "local", platform: "university:Green:+", destination: "southbank", seconds: 60, predictionKind: "live", status: "on-time", load: 10, capacity: 100 }],
-  };
-  const assistant = vi.spyOn(api, "assistant").mockResolvedValue({
-    text: "**University** arrivals:\n\n- Take *Green* toward Southbank",
-    arrivals: board, tools: ["Resolve_station", "get_arrivals"],
-  });
+const network: NetworkDefinition = {
+  stations: ["university", "southbank"].map((id) => ({
+    id, name: id === "university" ? "University" : "Southbank",
+    x: 0, y: 0, character: "campus", accessPerMinute: 100, platformCapacity: 100,
+    residential: 0, jobs: 0, education: 0, leisure: 0,
+  })),
+  lines: [], accessEdges: [],
+};
+
+const board: StationBoard = {
+  stationId: "university", scenarioId: "current", generation: 4,
+  asOf: "2026-11-17T11:34:24Z", updatedAt: "2026-11-17T11:34:24Z", stale: true, restrictions: [],
+  arrivals: [{ trainId: "green-1", line: "Green", service: "local", platform: "university:Green:+", destination: "southbank", seconds: 60, predictionKind: "live", status: "on-time", load: 10, capacity: 100 }],
+};
+
+const metric = { mean: 1, min: 0, max: 2 };
+const comparison: ComparisonResult = {
+  scenarioId: "current",
+  generation: 4,
+  version: 1,
+  checkpointTime: "2026-11-17T11:34:24Z",
+  horizonMinutes: 15,
+  samples: 3,
+  candidate: { kind: "hold", target: "green-1", amount: 30 },
+  baseline: {
+    waitingMinutes: metric, completed: metric, deniedBoardings: metric, abandoned: metric,
+    remainingQueue: metric, oldestQueueSeconds: metric, platformOverloads: metric, accessibilityFailures: metric,
+  },
+  intervention: {
+    waitingMinutes: metric, completed: metric, deniedBoardings: metric, abandoned: metric,
+    remainingQueue: metric, oldestQueueSeconds: metric, platformOverloads: metric, accessibilityFailures: metric,
+  },
+  method: "paired",
+  warnings: [],
+};
+
+const journeyContext = { origin: "university", destination: "southbank", accessible: true };
+const richResponse: AssistantResponse = {
+  text: "**University** answer:\n\n- Take *Green* toward Southbank",
+  arrivals: board,
+  tools: ["Resolve_station", "get_arrivals"],
+  journeyContext,
+  journey: {
+    scenarioId: "current", generation: 4, version: 1, asOf: "2026-11-17T11:34:24Z",
+    request: journeyContext, options: [],
+  },
+  comparison,
+  proposal: {
+    id: "proposal-1", action: { kind: "hold", target: "green-1", amount: 30 },
+    scenarioId: "current", generation: 4, version: 1, explanation: "Hold the train.", status: "pending",
+  },
+};
+
+it("renders only safe answer text for passengers and preserves follow-up context", async () => {
+  const assistant = vi.spyOn(api, "assistant")
+    .mockResolvedValueOnce(richResponse)
+    .mockResolvedValueOnce({ text: "Follow-up answer" });
   const view = render(<AssistantPanel kind="passenger" network={network} currentScenarioId="current" currentGeneration={4}
-    capabilities={{ text: true, transcription: false, speech: false, provider: "OpenAI" }} capabilityError={null} />);
+    capabilities={{ text: true, transcription: false, speech: true, provider: "OpenAI" }} capabilityError={null} />);
+
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "University arrivals" } });
   fireEvent.click(screen.getByRole("button", { name: "Send" }));
-  await screen.findByRole("table", { name: "Station arrivals" });
-  expect(assistant.mock.calls[0][0].viewerTimeZone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
-  expect(screen.getByText("Live arrivals unavailable")).toBeTruthy();
-  expect(view.container.querySelector(".tool-provenance")?.hasAttribute("open")).toBe(false);
-  expect(view.container.textContent).not.toMatch(/Resolve_station|university:Green|\*\*/);
-  fireEvent.click(screen.getByText("Sources used"));
-  expect(screen.getByText("Station lookup")).toBeTruthy();
-  expect(screen.getByText("Live arrival board")).toBeTruthy();
+  await screen.findByText("University");
 
-  view.rerender(<AssistantPanel kind="passenger" network={network} currentScenarioId="replacement" currentGeneration={4}
-    capabilities={{ text: true, transcription: false, speech: false, provider: "OpenAI" }} capabilityError={null} />);
-  expect(screen.queryByRole("table", { name: "Station arrivals" })).toBeNull();
-  expect(screen.getByText("Updating station arrivals…")).toBeTruthy();
+  expect(assistant.mock.calls[0][0]).toEqual(expect.objectContaining({
+    viewerTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    journeyContext: null,
+  }));
+  expect(view.container.textContent).not.toMatch(/Resolve_station|university:Green|\*\*/);
+  expect(view.container.querySelector(".tool-provenance")).toBeNull();
+  expect(view.container.querySelector(".assistant-arrivals")).toBeNull();
+  expect(view.container.querySelector(".journey-results")).toBeNull();
+  expect(view.container.querySelector(".comparison-card")).toBeNull();
+  expect(view.container.querySelector(".proposal-card")).toBeNull();
+  expect(screen.queryByRole("button", { name: /Read reply|Voice conversation/ })).toBeNull();
+
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "What about accessibility?" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  await screen.findByText("Follow-up answer");
+  expect(assistant.mock.calls[1][0]).toEqual(expect.objectContaining({
+    journeyContext,
+    viewerTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  }));
+});
+
+it("shows the shared-chat disclosure only for available public Signal chat", () => {
+  const view = render(<AssistantPanel kind="passenger"
+    capabilities={{ text: true, transcription: false, speech: false, provider: "AI provider", sharedChat: true }}
+    capabilityError={null} />);
+  expect(screen.getByText(/Questions go to an AI provider/).textContent).toMatch(/don't include personal information/i);
+
+  view.rerender(<AssistantPanel kind="passenger"
+    capabilities={{ text: true, transcription: false, speech: false, provider: "AI provider" }}
+    capabilityError={null} />);
+  expect(screen.queryByText(/Questions go to an AI provider/)).toBeNull();
+
+  view.rerender(<AssistantPanel kind="passenger"
+    capabilities={{ text: false, transcription: false, speech: false, provider: "AI provider", sharedChat: true }}
+    capabilityError={null} />);
+  expect(screen.queryByText(/Questions go to an AI provider/)).toBeNull();
+
+  view.rerender(<AssistantPanel kind="operations"
+    capabilities={{ text: true, transcription: false, speech: false, provider: "AI provider", sharedChat: true }}
+    capabilityError={null} />);
+  expect(screen.queryByText(/Questions go to an AI provider/)).toBeNull();
+});
+
+it("keeps rich result and provenance flows in Dispatch", async () => {
+  vi.spyOn(api, "assistant").mockResolvedValue(richResponse);
+  const approve = vi.spyOn(api, "approveProposal").mockResolvedValue({
+    accepted: true, status: "approved", message: "Approved", version: 2,
+  });
+  const view = render(<AssistantPanel kind="operations" network={network} currentScenarioId="current" currentGeneration={4}
+    capabilities={{ text: true, transcription: true, speech: true, provider: "OpenAI" }} capabilityError={null} />);
+
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "Investigate" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  await screen.findByRole("table", { name: "Station arrivals" });
+
+  expect(view.container.querySelector(".tool-provenance")).not.toBeNull();
+  expect(view.container.querySelector(".comparison-card")).not.toBeNull();
+  expect(view.container.querySelector(".proposal-card")).not.toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Approve and revalidate" }));
+  await waitFor(() => expect(approve).toHaveBeenCalledWith(richResponse.proposal));
 });
 
 const voiceCapabilities = { text: true, transcription: true, speech: true, provider: "OpenAI" };
@@ -126,24 +215,11 @@ function renderVoice() {
       });
     }
   });
-  const play = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
-  const pause = vi.fn();
-  vi.stubGlobal("Audio", class {
-    play = play;
-    pause = pause;
-  });
-  const createObjectURL = vi.fn(() => "blob:reply");
-  const revokeObjectURL = vi.fn();
-  vi.stubGlobal("URL", class extends URL {
-    static createObjectURL = createObjectURL;
-    static revokeObjectURL = revokeObjectURL;
-  });
   const transcribe = vi.spyOn(api, "transcribe").mockResolvedValue({ text: "Spoken question" });
   const assistant = vi.spyOn(api, "assistant").mockResolvedValue({ text: "Signal's answer" });
-  const speech = vi.spyOn(api, "speech").mockResolvedValue(new Blob(["synthetic reply"]));
   const view = render(<AssistantPanel kind="passenger" capabilities={voiceCapabilities} capabilityError={null} />);
   const input = screen.getByRole<HTMLTextAreaElement>("textbox");
-  return { view, input, getUserMedia, stopTrack, transcribe, assistant, speech, play, pause, createObjectURL, revokeObjectURL };
+  return { view, input, getUserMedia, stopTrack, transcribe, assistant };
 }
 
 async function startRecording() {
@@ -175,66 +251,13 @@ it("starts and stops on separate taps and puts the transcript in the editable dr
   await screen.findByText("Signal's answer");
 });
 
-it("plays replies automatically only for opted-in recorded turns without reopening the microphone", async () => {
-  const { input, getUserMedia, assistant, speech, play } = renderVoice();
-  const mode = screen.getByRole("button", { name: "Voice conversation" });
-  expect(mode.getAttribute("aria-pressed")).toBe("false");
-  fireEvent.click(mode);
-  expect(mode.getAttribute("aria-pressed")).toBe("true");
+it("never exposes reply playback or automatic voice conversation for legacy speech capability", async () => {
+  const { assistant } = renderVoice();
   sendTyped("Typed question");
   await screen.findByText("Signal's answer");
-  expect(speech).not.toHaveBeenCalled();
-  expect(getUserMedia).not.toHaveBeenCalled();
-
-  fireEvent.change(input, { target: { value: "Unsent draft" } });
-  fireEvent.click(await startRecording());
-  await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
-  expect(assistant.mock.calls.map(([request]) => request.message)).toEqual(["Typed question", "Spoken question"]);
-  expect(speech).toHaveBeenCalledExactlyOnceWith("Signal's answer");
-  expect(screen.getByRole("status").textContent).toMatch(/Playing/);
-  expect(screen.getByRole("button", { name: "Read reply 2 aloud" }).getAttribute("aria-pressed")).toBe("true");
-  expect(getUserMedia).toHaveBeenCalledTimes(1);
-  expect(input.value).toBe("Unsent draft");
-});
-
-it("stops a reply on a second tap and replaces audio when another reply is selected", async () => {
-  const { assistant, speech, play, pause, revokeObjectURL } = renderVoice();
-  assistant.mockResolvedValueOnce({ text: "First answer" }).mockResolvedValueOnce({ text: "Second answer" });
-  sendTyped("First question");
-  const first = await screen.findByRole("button", { name: "Read reply 1 aloud" });
-  sendTyped("Second question");
-  const second = await screen.findByRole("button", { name: "Read reply 2 aloud" });
-  expect(speech).not.toHaveBeenCalled();
-  fireEvent.click(first);
-  await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
-  fireEvent.click(second);
-  await waitFor(() => expect(play).toHaveBeenCalledTimes(2));
-  expect(first.getAttribute("aria-pressed")).toBe("false");
-  expect(pause).toHaveBeenCalledTimes(1);
-  fireEvent.click(second);
-  expect(second.getAttribute("aria-pressed")).toBe("false");
-  expect(pause).toHaveBeenCalledTimes(2);
-  expect(revokeObjectURL).toHaveBeenCalledTimes(2);
-  expect(speech.mock.calls).toEqual([["First answer"], ["Second answer"]]);
-});
-
-it("ignores speech that arrives after the rider selects another reply", async () => {
-  const { assistant, speech, createObjectURL, play } = renderVoice();
-  assistant.mockResolvedValueOnce({ text: "First answer" }).mockResolvedValueOnce({ text: "Second answer" });
-  const slowSpeech = deferred<Blob>();
-  const currentBlob = new Blob(["second"]);
-  speech.mockReturnValueOnce(slowSpeech.promise).mockResolvedValueOnce(currentBlob);
-  sendTyped("First question");
-  const first = await screen.findByRole("button", { name: "Read reply 1 aloud" });
-  sendTyped("Second question");
-  const second = await screen.findByRole("button", { name: "Read reply 2 aloud" });
-  fireEvent.click(first);
-  fireEvent.click(second);
-  await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
-  await act(async () => slowSpeech.resolve(new Blob(["first"])));
-  expect(createObjectURL).toHaveBeenCalledExactlyOnceWith(currentBlob);
-  expect(first.getAttribute("aria-pressed")).toBe("false");
-  expect(second.getAttribute("aria-pressed")).toBe("true");
+  expect(assistant).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole("button", { name: /Read reply|Voice conversation/ })).toBeNull();
+  expect(screen.queryByText(/AI-generated voice|Preparing reply audio|Playing reply/)).toBeNull();
 });
 
 it("stops using the microphone if permission resolves after unmount", async () => {
@@ -242,75 +265,31 @@ it("stops using the microphone if permission resolves after unmount", async () =
   const permission = deferred<Awaited<ReturnType<typeof getUserMedia>>>();
   getUserMedia.mockReturnValueOnce(permission.promise);
   fireEvent.click(screen.getByRole("button", { name: "Start recording" }));
+  expect(screen.getByRole("status").textContent).toMatch(/Waiting for microphone permission/);
   view.unmount();
   await act(async () => permission.resolve({ getTracks: () => [{ stop: stopTrack }] }));
   expect(stopTrack).toHaveBeenCalledTimes(1);
   expect(transcribe).not.toHaveBeenCalled();
 });
 
-it("leaves typed text usable after microphone denial or blocked audio playback", async () => {
-  const { getUserMedia, input, play, revokeObjectURL } = renderVoice();
+it("leaves typed text usable after microphone denial", async () => {
+  const { getUserMedia, input } = renderVoice();
   getUserMedia.mockRejectedValueOnce(new DOMException("Permission denied", "NotAllowedError"));
   fireEvent.change(input, { target: { value: "Keep me" } });
   fireEvent.click(screen.getByRole("button", { name: "Start recording" }));
   expect((await screen.findByRole("alert")).textContent).toMatch(/Microphone unavailable/);
   expect(input.value).toBe("Keep me");
-
-  fireEvent.click(screen.getByRole("button", { name: "Send" }));
-  const speaker = await screen.findByRole("button", { name: "Read reply 1 aloud" });
-  fireEvent.change(input, { target: { value: "Next question" } });
-  play.mockRejectedValueOnce(new DOMException("Playback blocked", "NotAllowedError"));
-  fireEvent.click(speaker);
-  expect((await screen.findByRole("alert")).textContent).toMatch(/Playback blocked/);
-  expect(speaker.getAttribute("aria-pressed")).toBe("false");
-  expect(revokeObjectURL).toHaveBeenCalledTimes(1);
-  expect(input.value).toBe("Next question");
 });
 
-it("hides controls for unavailable voice capabilities and in dispatch", async () => {
+it("hides recording when transcription is unavailable and hides attendee voice in Dispatch", async () => {
   const { view } = renderVoice();
   view.rerender(<AssistantPanel kind="passenger" capabilities={{ ...voiceCapabilities, speech: false }} capabilityError={null} />);
-  sendTyped("Typed question");
-  await screen.findByText("Signal's answer");
   expect(screen.getByRole("button", { name: "Start recording" })).toBeTruthy();
-  expect(screen.queryByRole("button", { name: "Voice conversation" })).toBeNull();
-  expect(screen.queryByRole("button", { name: /Read reply/ })).toBeNull();
 
   view.rerender(<AssistantPanel kind="passenger" capabilities={{ ...voiceCapabilities, transcription: false }} capabilityError={null} />);
-  expect(screen.getByRole("button", { name: "Read reply 1 aloud" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Start recording" })).toBeNull();
-  expect(screen.queryByRole("button", { name: "Voice conversation" })).toBeNull();
 
   view.rerender(<AssistantPanel kind="operations" capabilities={voiceCapabilities} capabilityError={null} />);
   expect(screen.getByRole("heading", { name: "Dispatch assistant" })).toBeTruthy();
-  expect(screen.queryByRole("button", { name: /Start recording|Voice conversation|Read reply/ })).toBeNull();
-});
-
-it("keeps a recording as a draft if voice conversation is turned off before transcription finishes", async () => {
-  const { assistant, input, transcribe } = renderVoice();
-  const pending = deferred<{ text: string }>();
-  transcribe.mockReturnValueOnce(pending.promise);
-  const mode = screen.getByRole("button", { name: "Voice conversation" });
-  fireEvent.click(mode);
-  fireEvent.click(await startRecording());
-  await waitFor(() => expect(transcribe).toHaveBeenCalledTimes(1));
-  fireEvent.click(mode);
-  await act(async () => pending.resolve({ text: "Spoken question" }));
-  expect(input.value).toBe("Spoken question");
-  expect(assistant).not.toHaveBeenCalled();
-});
-
-it("does not start late automatic speech after voice conversation is turned off", async () => {
-  const { speech, play, createObjectURL } = renderVoice();
-  const pendingSpeech = deferred<Blob>();
-  speech.mockReturnValueOnce(pendingSpeech.promise);
-  const mode = screen.getByRole("button", { name: "Voice conversation" });
-  fireEvent.click(mode);
-  fireEvent.click(await startRecording());
-  await waitFor(() => expect(speech).toHaveBeenCalledTimes(1));
-  fireEvent.click(mode);
-  await act(async () => pendingSpeech.resolve(new Blob(["late answer"])));
-  expect(createObjectURL).not.toHaveBeenCalled();
-  expect(play).not.toHaveBeenCalled();
-  expect(screen.getByRole("button", { name: "Read reply 1 aloud" }).getAttribute("aria-pressed")).toBe("false");
+  expect(screen.queryByRole("button", { name: "Start recording" })).toBeNull();
 });

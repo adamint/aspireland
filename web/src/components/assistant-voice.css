@@ -48,21 +48,6 @@
   color: var(--danger);
 }
 
-.assistant-panel--passenger .signal-reply-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 4px;
-}
-
-.assistant-panel--passenger .signal-reply-header .message-label {
-  margin: 0;
-}
-
-.assistant-panel--passenger .signal-speaker {
-  min-width: 44px;
-}
-
 .assistant-panel--passenger .signal-voice-icon {
   width: 18px;
   height: 18px;

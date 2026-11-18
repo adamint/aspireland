@@ -2,8 +2,10 @@
 
 Leave Foundry unconfigured for local development without Azure and for the
 [single-host demo](deploy.md). The simulator, Dispatch controls, station boards
-and ordinary journey planning don't need it. Anonymous attendees never get
-model access, even if the local sites do.
+and ordinary journey planning don't need it. Attendee Signal text chat is off
+by default, even if the local sites are configured. See
+[the attendee opt-in](deploy.md#enable-signal-text-chat-optional). Attendees
+never get recording, speech, or Dispatch access.
 
 Setting `MetroOps:ProvisionFoundry` to `true` lets Aspire provision a dedicated
 Foundry account and three Azure OpenAI deployments: GPT-5 mini with GlobalStandard
@@ -97,14 +99,9 @@ failures stay visible rather than becoming fabricated answers.
 
 Try “What's the fastest accessible route from University to the airport?” on
 the passenger site, or “Why are Central Exchange queues growing?” in Dispatch.
-Signal is the passenger guide. Tap the microphone to start recording and tap
-again to stop. By default, the transcript goes into the draft so you can edit
-it before sending. Use a reply's speaker button to listen to that reply or
-stop it.
-
-Turn on **Voice conversation** to send each recorded turn after transcription
-and hear Signal's AI-generated reply. You still start and stop the microphone
-each turn. Typed messages don't play automatically.
+Signal replies in text. On the private passenger site, tap the microphone to
+start recording and tap again to stop. The transcript goes into the draft so
+you can edit it before sending.
 
 To turn Foundry off, stop the AppHost and restart with
 `MetroOps__ProvisionFoundry=false` and no existing model connection strings.

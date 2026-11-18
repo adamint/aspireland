@@ -11,6 +11,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const time = "2026-11-17T08:00:00Z";
 const secret = "PRIVATE-CHECKPOINT-DO-NOT-SHARE";
 const journeyRequest = { origin: "university", destination: "airport", accessible: false, departureTime: null };
+const chatRequest = { message: "When is the next train?" };
 const leg = {
   kind: "ride", line: "AX", from: "university", to: "airport", platform: "university:AX:+",
   destination: "airport", service: "express", waitSeconds: 30, rideSeconds: 300, walkSeconds: 0,
@@ -73,6 +74,25 @@ function journey() {
     }],
     error: null, checkpoint: secret,
   };
+}
+
+function aiFixture(t, { text = true, assistant, limits } = {}) {
+  return fixture(t, {
+    limits: { signalChat: true, ...limits },
+    handler(req, res) {
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("Set-Cookie", "operator=private");
+      res.setHeader("X-Internal-Key", secret);
+      if (req.url === "/api/assistant" && assistant) return assistant(req, res);
+      const data = req.url === "/api/capabilities"
+        ? { text, transcription: true, speech: true, provider: secret, reason: secret, account: secret }
+        : req.url === "/api/assistant"
+          ? { text: "The next train is in 30 seconds.", journeyContext: { ...journeyRequest, private: secret },
+            journey: journey(), arrivals: board(), comparison: { secret }, proposal: { secret }, tools: [secret], diagnostics: secret }
+          : req.url === "/api/journeys" ? journey() : req.url === "/api/world" ? snapshot() : board();
+      res.end(JSON.stringify(data));
+    },
+  });
 }
 
 async function listen(server) {
@@ -144,9 +164,16 @@ function rawRequest(origin, target, { method = "GET", headers = {}, body } = {})
   });
 }
 
+function postChat(f, payload = chatRequest, { headers, target = "/api/assistant", raw = false } = {}) {
+  return rawRequest(f.origin, target, {
+    method: "POST", headers: { "Content-Type": "application/json", ...headers },
+    body: raw ? payload : JSON.stringify(payload),
+  });
+}
+
 test("configuration requires an explicit numeric loopback HTTP upstream and valid port", () => {
   assert.deepEqual(readConfig([], { PASSENGER_API_URL: "http://127.0.0.1:60902" }), {
-    port: 6173, upstream: "http://127.0.0.1:60902",
+    port: 6173, upstream: "http://127.0.0.1:60902", signalChat: false,
   });
   assert.equal(readConfig(["--port", "6174", "--upstream", "http://[::1]:60902"], {}).port, 6174);
   assert.equal(readConfig([], { PASSENGER_API_URL: "http://127.0.0.1:80/" }).upstream, "http://127.0.0.1:80");
@@ -161,6 +188,14 @@ test("configuration requires an explicit numeric loopback HTTP upstream and vali
   }
   assert.throws(() => readConfig([], {}), /upstream/i);
   assert.throws(() => readConfig(["--host", "0.0.0.0"], {}), /argument/i);
+});
+
+test("only the exact startup opt-in enables attendee Signal", () => {
+  for (const flag of [undefined, "", "false", "TRUE", "1", " true ", "true"]) {
+    assert.equal(readConfig([], {
+      PASSENGER_API_URL: "http://127.0.0.1:60902", CONFERENCE_SIGNAL_CHAT: flag,
+    }).signalChat, flag === "true");
+  }
 });
 
 test("serves only sealed passenger assets and intentional known station SPA routes", async (t) => {
@@ -312,6 +347,191 @@ test("AI and voice are explicitly disabled and all operator mutations are denied
     assert.equal((await rawRequest(f.origin, route, { method })).status, 405, `${method} ${route}`);
   }
   assert.equal(f.requests.length, 0);
+});
+
+test("opt-in is not enough when private text capability is disabled or malformed", async (t) => {
+  for (const text of [false, "true"]) {
+    const f = await aiFixture(t, { text });
+    const capabilities = await rawRequest(f.origin, "/api/capabilities");
+    const data = JSON.parse(capabilities.text);
+    assert.equal(data.text, false);
+    assert.equal(data.speech, false);
+    assert.equal(data.transcription, false);
+    assert.equal(data.sharedChat, undefined);
+    assert.ok(!capabilities.text.includes(secret));
+    assert.equal((await postChat(f)).status, 503);
+    assert.deepEqual(f.requests.map(({ method, path }) => [method, path]), [["GET", "/api/capabilities"]]);
+  }
+});
+
+test("projects configured capabilities and a real Passenger chat turn without leaking cards or headers", async (t) => {
+  const f = await aiFixture(t);
+  const capabilities = await rawRequest(f.origin, "/api/capabilities");
+  assert.equal(capabilities.status, 200);
+  assert.deepEqual(JSON.parse(capabilities.text), {
+    text: true, transcription: false, speech: false, provider: "attendee", sharedChat: true,
+  });
+  assert.equal(capabilities.headers["set-cookie"], undefined);
+  assert.match(capabilities.headers["permissions-policy"], /microphone=\(\)/);
+
+  const body = {
+    message: "Can I make that trip without stairs?",
+    history: [
+      { role: "user", content: "Plan my trip" },
+      { role: "assistant", content: "Here is a route." },
+      { role: "user", content: "Can I make that trip without stairs?" },
+    ],
+    journeyContext: { ...journeyRequest, departureTime: "2026-11-17T03:00:00.1234000-05:00" },
+    viewerTimeZone: "America/New_York",
+  };
+  const first = await postChat(f, body, {
+    headers: { Cookie: "operator=private", Authorization: "Bearer private", "X-Operator-Key": secret, "X-Forwarded-Host": "private" },
+  });
+  assert.equal(first.status, 200);
+  assert.deepEqual(JSON.parse(first.text), { text: "The next train is in 30 seconds.", journeyContext: journeyRequest });
+  assert.equal(first.headers["cache-control"], "no-store");
+  assert.equal(first.headers["set-cookie"], undefined);
+  assert.equal(first.headers["x-internal-key"], undefined);
+  assert.equal((await postChat(f, body)).status, 200);
+  const forwarded = f.requests.filter((req) => req.method === "POST");
+  assert.deepEqual(forwarded.map((req) => [req.path, JSON.parse(req.body)]), [
+    ["/api/assistant", body], ["/api/assistant", body],
+  ]);
+  for (const header of ["cookie", "authorization", "x-operator-key", "x-forwarded-host"]) {
+    assert.equal(forwarded[0].headers[header], undefined, header);
+  }
+});
+
+test("still denies cross-site chat, voice and any other non-allowlisted routes with opt-in on", async (t) => {
+  const f = await aiFixture(t);
+  assert.equal((await postChat(f, chatRequest, { headers: { "Sec-Fetch-Site": "cross-site" } })).status, 403);
+  assert.equal((await rawRequest(f.origin, "/api/assistant")).status, 405);
+  for (const target of ["/api/speech", "/api/transcribe"]) {
+    assert.equal((await postChat(f, chatRequest, { target })).status, 503, target);
+  }
+  for (const target of ["/api/assistant/", "/api/assistant?x=1", "/api/%61ssistant", "/api/compare",
+    "/api/actions", "/api/clock", "/api/scenarios", "/api/authority", "/api/proposals/1/approve", "/operations"]) {
+    assert.equal((await postChat(f, chatRequest, { target })).status, 404, target);
+  }
+  assert.deepEqual(f.requests.map((req) => req.path), ["/api/capabilities"]);
+});
+
+test("rejects malformed, oversized and control-bearing chat input without spending a turn", async (t) => {
+  const f = await aiFixture(t);
+  for (const [body, note] of [
+    [null, "null input"], [["test"], "array"], [{ message: "  " }, "empty text"],
+    [{ message: "a".repeat(8001) }, "message length"],
+    [{ ...chatRequest, history: [{ role: "system", content: "private" }] }, "system role"],
+    [{ ...chatRequest, history: [{ role: "tool", content: "private" }] }, "tool role"],
+    [{ ...chatRequest, history: [{ role: "user", content: "x", toolCallId: secret }] }, "history extra field"],
+    [{ ...chatRequest, history: Array(21).fill({ role: "user", content: "x" }) }, "history count"],
+    [{ ...chatRequest, history: Array(4).fill({ role: "assistant", content: "x".repeat(8000) }) }, "total text"],
+    [{ ...chatRequest, provider: secret }, "provider override"],
+    [{ ...chatRequest, authorization: secret }, "client authority"],
+    [{ ...chatRequest, journeyContext: { ...journeyRequest, scenarioId: "private" } }, "journey authority"],
+    [{ ...chatRequest, journeyContext: { ...journeyRequest, destination: "../clock" } }, "station ID"],
+    [{ ...chatRequest, journeyContext: { ...journeyRequest, accessible: "true" } }, "accessibility type"],
+    [{ ...chatRequest, journeyContext: { ...journeyRequest, departureTime: "tomorrow" } }, "departure type"],
+    [{ ...chatRequest, journeyContext: { ...journeyRequest, departureTime: "2026-02-29T08:00:00Z" } }, "invalid calendar date"],
+    [{ ...chatRequest, journeyContext: { ...journeyRequest, departureTime: "2026-11-17T24:00:00Z" } }, "invalid time"],
+    [{ ...chatRequest, viewerTimeZone: "Mars/Olympus" }, "unknown timezone"],
+    [{ ...chatRequest, viewerTimeZone: "+04:00" }, "offset instead of IANA"],
+  ]) assert.equal((await postChat(f, body)).status, 400, note);
+  assert.equal((await postChat(f, "{", { raw: true })).status, 400);
+  assert.equal((await postChat(f, " ".repeat(65_537), { raw: true })).status, 413);
+  assert.equal((await postChat(f, chatRequest, { headers: { "Content-Type": "text/plain" } })).status, 415);
+  assert.deepEqual(f.requests.map((req) => req.path), ["/api/capabilities"]);
+  assert.equal((await postChat(f, { ...chatRequest, history: null, viewerTimeZone: "UTC", journeyContext: null })).status, 200);
+  assert.equal((await postChat(f)).status, 200);
+});
+
+test("rejects invalid projected chat responses and never relays upstream errors or redirects", async (t) => {
+  const responses = [
+    (res) => res.end(JSON.stringify({ text: "Answer", journeyContext: { ...journeyRequest, destination: 42 } })),
+    (res) => res.end(JSON.stringify({ text: null })),
+    (res) => res.end(JSON.stringify({ text: "Answer", extra: "x".repeat(65_536) })),
+    (res) => { res.writeHead(302, { Location: "/private" }); res.end(secret); },
+    (res) => { res.statusCode = 503; res.end(secret); },
+  ];
+  let now = 0;
+  const f = await aiFixture(t, {
+    limits: { assistantNow: () => now },
+    assistant: (_req, res) => responses.shift()(res),
+  });
+  while (responses.length > 0) {
+    now += 60_000;
+    const response = await postChat(f);
+    assert.equal(response.status, 502);
+    assert.ok(!response.text.includes(secret));
+  }
+  assert.ok(f.requests.every((req) => ["/api/assistant", "/api/capabilities"].includes(req.path)));
+});
+
+test("keeps the single Signal slot and its inference deadline separate from ordinary reads and journeys", async (t) => {
+  let signalStarted;
+  const started = new Promise((resolve) => { signalStarted = resolve; });
+  let finish;
+  const f = await aiFixture(t, {
+    limits: { maxActiveRequests: 1, maxUpstreamRequests: 1, upstreamTimeoutMs: 200, assistantTimeoutMs: 2000 },
+    assistant: (_req, res) => {
+      finish = () => res.end(JSON.stringify({ text: "Answer" }));
+      signalStarted();
+    },
+  });
+  const pending = postChat(f);
+  const first = await Promise.race([pending, started]);
+  assert.equal(first, undefined, "inference should start, not return a local rejection");
+  const busy = await postChat(f);
+  assert.equal(busy.status, 429);
+  assert.match(busy.text, /answering another|busy/i);
+  assert.equal((await rawRequest(f.origin, "/api/world")).status, 200);
+  assert.equal((await rawRequest(f.origin, "/api/stations/university/arrivals")).status, 200);
+  assert.equal((await postChat(f, journeyRequest, { target: "/api/journeys" })).status, 200);
+  await new Promise((resolve) => setTimeout(resolve, 220));
+  finish();
+  assert.equal((await pending).status, 200);
+  assert.equal(f.requests.filter((req) => req.path === "/api/assistant").length, 1);
+});
+
+test("times out a streaming assistant response and releases the Signal slot", async (t) => {
+  let attempts = 0;
+  const f = await aiFixture(t, {
+    limits: { assistantTimeoutMs: 100 },
+    assistant: (_req, res) => {
+      if (attempts++ === 0) res.write('{"text":');
+      else res.end(JSON.stringify({ text: "Answer" }));
+    },
+  });
+  const timeout = await postChat(f);
+  assert.equal(timeout.status, 504);
+  assert.match(timeout.text, /timed out/i);
+  assert.equal((await postChat(f)).status, 200);
+});
+
+test("allows only two starts per rolling minute and 120 starts per server run", async (t) => {
+  let now = 0;
+  const f = await aiFixture(t, { limits: { assistantNow: () => now } });
+  assert.equal((await postChat(f)).status, 200);
+  now = 30_000;
+  assert.equal((await postChat(f)).status, 200);
+  now = 59_999;
+  const limited = await postChat(f);
+  assert.equal(limited.status, 429);
+  assert.equal(limited.headers["retry-after"], "1");
+  assert.match(limited.text, /try again in 1 second/i);
+  now = 60_000;
+  assert.equal((await postChat(f)).status, 200);
+  assert.equal((await postChat(f)).headers["retry-after"], "30");
+  for (let turn = 4; turn <= 120; turn++) {
+    now += 60_000;
+    assert.equal((await postChat(f)).status, 200, `turn ${turn}`);
+  }
+  now += 60_000;
+  const exhausted = await postChat(f);
+  assert.equal(exhausted.status, 429);
+  assert.match(exhausted.text, /limit for this demo/i);
+  assert.equal(exhausted.headers["retry-after"], undefined);
+  assert.equal(f.requests.filter((req) => req.path === "/api/assistant").length, 120);
 });
 
 test("allows cross-site public GET navigation but denies cross-site POST requests", async (t) => {

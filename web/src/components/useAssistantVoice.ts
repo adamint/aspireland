@@ -9,13 +9,6 @@ interface Capture {
   accept?: (text: string) => void;
 }
 
-interface Playback {
-  replyId: string;
-  source: "manual" | "conversation";
-  url?: string;
-  audio?: HTMLAudioElement;
-}
-
 function releaseCapture(capture: Capture) {
   const { recorder, stream } = capture;
   capture.recorder = undefined;
@@ -27,27 +20,15 @@ function releaseCapture(capture: Capture) {
   stream?.getTracks().forEach((track) => track.stop());
 }
 
-function releasePlayback(playback: Playback) {
-  if (playback.audio) {
-    playback.audio.onended = playback.audio.onerror = null;
-    playback.audio.pause();
-  }
-  if (playback.url) URL.revokeObjectURL(playback.url);
-}
-
 function errorMessage(error: unknown, fallback: string) {
   return (error instanceof Error || error instanceof DOMException) && error.message ? error.message : fallback;
 }
 
-export function useAssistantVoice(transcriptionAvailable: boolean, speechAvailable: boolean) {
+export function useAssistantVoice(transcriptionAvailable: boolean) {
   const canRecord = transcriptionAvailable && !!navigator.mediaDevices?.getUserMedia && typeof MediaRecorder !== "undefined";
-  const canPlay = speechAvailable && typeof Audio !== "undefined"
-    && typeof URL.createObjectURL === "function" && typeof URL.revokeObjectURL === "function";
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus>("idle");
-  const [playback, setPlayback] = useState<{ replyId: string; playing: boolean } | null>(null);
   const [audioError, setAudioError] = useState<string | null>(null);
   const activeCapture = useRef<Capture | null>(null);
-  const activePlayback = useRef<Playback | null>(null);
 
   useLayoutEffect(() => {
     if (!canRecord) setCaptureStatus("idle");
@@ -58,64 +39,8 @@ export function useAssistantVoice(transcriptionAvailable: boolean, speechAvailab
     };
   }, [canRecord]);
 
-  useLayoutEffect(() => {
-    if (!canPlay) setPlayback(null);
-    return () => {
-      const playing = activePlayback.current;
-      activePlayback.current = null;
-      if (playing) releasePlayback(playing);
-    };
-  }, [canPlay]);
-
-  const stopPlayback = () => {
-    const playing = activePlayback.current;
-    if (!playing) return;
-    activePlayback.current = null;
-    releasePlayback(playing);
-    setPlayback(null);
-  };
-
-  const stopConversationPlayback = () => {
-    if (activePlayback.current?.source === "conversation") stopPlayback();
-  };
-
-  const playReply = async (replyId: string, text: string, source: Playback["source"] = "manual") => {
-    if (!canPlay || activeCapture.current) return;
-    const sameReply = activePlayback.current?.replyId === replyId;
-    stopPlayback();
-    if (sameReply) return;
-    const playing: Playback = { replyId, source };
-    activePlayback.current = playing;
-    setAudioError(null);
-    setPlayback({ replyId, playing: false });
-
-    const playbackError = (message: string) => {
-      if (activePlayback.current !== playing) return;
-      stopPlayback();
-      setAudioError(message);
-    };
-
-    try {
-      const blob = await api.speech(text);
-      if (activePlayback.current !== playing) return;
-      playing.url = URL.createObjectURL(blob);
-      const audio = playing.audio = new Audio(playing.url);
-      audio.onended = () => {
-        if (activePlayback.current === playing) stopPlayback();
-      };
-      audio.onerror = () => playbackError(audio.error?.message || "Speech playback is unavailable.");
-      await audio.play();
-      if (activePlayback.current === playing) setPlayback({ replyId, playing: true });
-    } catch (error) {
-      playbackError(error instanceof DOMException && error.name === "NotAllowedError"
-        ? "Playback blocked by the browser. Use the speaker button to try again."
-        : errorMessage(error, "Speech playback is unavailable."));
-    }
-  };
-
   const startRecording = async () => {
     if (!canRecord || activeCapture.current) return;
-    stopPlayback();
     setAudioError(null);
     const capture: Capture = {};
     activeCapture.current = capture;
@@ -179,5 +104,5 @@ export function useAssistantVoice(transcriptionAvailable: boolean, speechAvailab
     capture.recorder.stop();
   };
 
-  return { canRecord, canPlay, captureStatus, playback, audioError, startRecording, stopRecording, playReply, stopConversationPlayback };
+  return { canRecord, captureStatus, audioError, startRecording, stopRecording };
 }

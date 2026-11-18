@@ -15,7 +15,8 @@ Use a dedicated host or VM with the [local prerequisites](../README.md#run-it-lo
 and [Caddy 2](https://caddyserver.com/docs/install). Use a dedicated OS account
 for Aspire that can run Docker. Keep Docker and the host account private.
 Check out a specific Git revision and run all Aspire commands from that same
-clone. Leave Foundry unconfigured; there's no model dependency or cost here.
+clone. Leave Foundry unconfigured for the default demo; there's no model
+dependency or cost unless you opt in to Signal below.
 
 Set the ingress rules **before** starting Aspire:
 
@@ -81,8 +82,8 @@ The attendee origin serves only the production passenger bundle, public
 status and map data, station boards, and ordinary journey lookups. Journey
 requests use POST, but don't change the simulation. The attendee origin
 handles the route and field allowlists; Caddy forwards to no other service.
-AI and voice are disabled for attendees. No redirect from HTTP is configured;
-share the HTTPS URL. If you add a tunnel as a temporary front door, it must
+Signal is off by default and attendee voice is always off. No redirect from
+HTTP is configured; share the HTTPS URL. If you add a tunnel, it must
 point to this same attendee origin only, never to the underlying services.
 
 If you're using Dev Tunnels, set `ATTENDEE_URL` to the attendee HTTPS URL
@@ -92,6 +93,33 @@ QR code for your slide:
 ```sh
 uv run --script scripts/attendee-qr.py "$ATTENDEE_URL" --output attendee-qr.png
 ```
+
+### Enable Signal text chat (optional)
+
+Use the sealed build from this revision; don't share the private Passenger
+site to turn on chat. If [Foundry](foundry.md) is already configured for chat,
+check that the private `passenger-api` returns `text: true` at
+`/api/capabilities`. Start just the attendee origin with the opt-in:
+
+```sh
+CONFERENCE_SIGNAL_CHAT=true npm run start:conference --prefix web -- \
+  --port 6173 --upstream "http://127.0.0.1:$PASSENGER_API_PORT"
+```
+
+The origin checks the private text capability at startup. If it can't confirm
+it, the planner and boards still work and chat stays off until you restart
+the origin with a ready upstream. With chat enabled, expect `text: true` and
+both `transcription` and `speech` to remain `false`. Neither recordings nor
+Dispatch become public.
+
+Signal sends questions to the configured model provider. Don't enter personal
+information. The attendee origin doesn't cache chat responses, log prompts, or
+track attendees. It allows one chat request at a time, two starts per rolling
+minute shared by all attendees, and 120 starts per server run. A turn can make
+several model requests; these limits don't replace the provider's quota.
+Check one actual answer before sharing the URL. To turn attendee chat back
+off, restart just the attendee origin without `CONFERENCE_SIGNAL_CHAT=true`.
+No change to the tunnel, Aspire graph, or Foundry is needed to disable it.
 
 ## Check from outside
 
@@ -107,8 +135,8 @@ curl --silent --output /dev/null --write-out '%{http_code}\n' \
   -X POST "$ORIGIN/api/actions"
 ```
 
-Expect an Airport board, `text`, `transcription` and `speech` all `false`, and
-`404` for the operator action. Confirm an external client can't connect to the
+Expect an Airport board, `text: false` unless you enabled Signal, both voice
+flags `false`, and `404` for the operator action. Confirm an external client can't connect to the
 raw attendee port or any Aspire resource port before sharing the URL. This
 check doesn't reset or change the world.
 

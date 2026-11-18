@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { stationName, titleCase, viewerTimeZone } from "../format";
 import type {
@@ -60,18 +60,13 @@ export function AssistantPanel({
   const [input, setInput] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [voiceConversation, setVoiceConversation] = useState(false);
   const [approvalState, setApprovalState] = useState<Record<string, string>>({});
   const journeyContext = useRef<JourneyRequest | null>(null);
-  const pendingVoiceReply = useRef<string | null>(null);
-  const voiceMode = useRef(false);
   const conversation = useRef<HTMLDivElement | null>(null);
   const hasConversationUpdate = useRef(false);
-  const voiceDisclosure = useId();
   const passenger = kind === "passenger";
   const enabled = capabilities?.text === true;
-  const voice = useAssistantVoice(passenger && enabled && capabilities.transcription, passenger && enabled && capabilities.speech);
-  const canConverse = voice.canRecord && voice.canPlay;
+  const voice = useAssistantVoice(passenger && enabled && capabilities.transcription);
   const captureBusy = voice.captureStatus !== "idle";
   const recording = voice.captureStatus === "recording";
 
@@ -85,20 +80,11 @@ export function AssistantPanel({
     if (!container) return;
     container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
   }, [entries, submitting]);
-  useLayoutEffect(() => {
-    if (!canConverse) {
-      voiceMode.current = false;
-      setVoiceConversation(false);
-      voice.stopConversationPlayback();
-    }
-    return () => { pendingVoiceReply.current = null; };
-  }, [canConverse]);
-
   const appendDraft = (text: string) => {
     setInput((draft) => draft.trim() ? `${draft}\n${text}` : text);
   };
 
-  const send = async (message: string, fromRecording = false) => {
+  const send = async (message: string) => {
     if (!enabled || !message || submitting) return;
     const userEntry: ConversationEntry = { id: crypto.randomUUID(), role: "user", text: message };
     const recent: ChatMessage[] = [...entries, userEntry].slice(-8).map((entry) => ({
@@ -106,8 +92,7 @@ export function AssistantPanel({
       content: entry.text,
     }));
     setEntries((current) => [...current, userEntry]);
-    if (fromRecording) pendingVoiceReply.current = userEntry.id;
-    else setInput("");
+    setInput("");
     setSubmitting(true);
     setError(null);
     try {
@@ -117,34 +102,18 @@ export function AssistantPanel({
         journeyContext: journeyContext.current,
         viewerTimeZone: viewerTimeZone(),
       });
-      const replyId = crypto.randomUUID();
-      setEntries((current) => [...current, { id: replyId, role: "assistant", text: response.text, payload: response }]);
+      setEntries((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: response.text, payload: response }]);
       if (response.journeyContext) journeyContext.current = response.journeyContext;
-      if (pendingVoiceReply.current === userEntry.id) void voice.playReply(replyId, response.text, "conversation");
     } catch (assistantError) {
       setError(assistantError instanceof Error ? assistantError.message : "The assistant is unavailable.");
-      if (fromRecording) appendDraft(message);
     } finally {
-      if (pendingVoiceReply.current === userEntry.id) pendingVoiceReply.current = null;
       setSubmitting(false);
-    }
-  };
-
-  const toggleVoiceConversation = () => {
-    voiceMode.current = !voiceMode.current;
-    setVoiceConversation(voiceMode.current);
-    if (!voiceMode.current) {
-      pendingVoiceReply.current = null;
-      voice.stopConversationPlayback();
     }
   };
 
   const tapMicrophone = () => {
     if (recording) {
-      voice.stopRecording((text) => {
-        if (voiceMode.current) void send(text, true);
-        else appendDraft(text);
-      });
+      voice.stopRecording(appendDraft);
     } else {
       void voice.startRecording();
     }
@@ -166,10 +135,7 @@ export function AssistantPanel({
 
   const voiceStatus = recording ? "Recording…"
     : voice.captureStatus === "requesting" ? "Waiting for microphone permission…"
-    : voice.captureStatus === "transcribing" ? "Transcribing…"
-    : voice.playback?.playing ? "Playing reply…"
-    : voice.playback ? "Preparing reply audio…" : "";
-  let replyNumber = 0;
+    : voice.captureStatus === "transcribing" ? "Transcribing…" : "";
   return (
     <section className={`assistant-panel assistant-panel--${kind}`} aria-label={`${kind} assistant`}>
       <header className="assistant-header">
@@ -192,6 +158,11 @@ export function AssistantPanel({
             : capabilities?.reason ?? capabilityError ?? "The model provider is not configured. Live forms and boards still work."}
         </div>
       )}
+      {passenger && enabled && capabilities?.sharedChat && (
+        <div className="notice">
+          Questions go to an AI provider. Don&apos;t include personal information.
+        </div>
+      )}
 
       <div className="conversation" ref={conversation}>
         {entries.length === 0 && (
@@ -206,47 +177,30 @@ export function AssistantPanel({
         )}
         {entries.map((entry) => (
           <article key={entry.id} className={`message message--${entry.role}`}>
-            <div className={entry.role === "assistant" && voice.canPlay ? "signal-reply-header" : undefined}>
+            <div>
               <div className="message-label">{entry.role === "user" ? "You" : passenger ? "Signal" : "Aspireland"}</div>
-              {entry.role === "assistant" && voice.canPlay && (
-                <button
-                  type="button"
-                  className="signal-voice-control signal-speaker"
-                  aria-label={`Read reply ${++replyNumber} aloud`}
-                  aria-pressed={voice.playback?.replyId === entry.id}
-                  aria-describedby={voiceDisclosure}
-                  title={voice.playback?.replyId === entry.id ? "Stop reply audio" : "Read reply aloud"}
-                  disabled={captureBusy}
-                  onClick={() => {
-                    pendingVoiceReply.current = null;
-                    void voice.playReply(entry.id, entry.text);
-                  }}
-                >
-                  <VoiceIcon kind={voice.playback?.replyId === entry.id ? "stop" : "speaker"} />
-                </button>
-              )}
             </div>
             {entry.role === "assistant" ? <SafeMarkdown text={entry.text} /> : <p>{entry.text}</p>}
-            {entry.payload?.tools && entry.payload.tools.length > 0 && (
+            {!passenger && entry.payload?.tools && entry.payload.tools.length > 0 && (
               <details className="tool-provenance">
                 <summary>Sources used</summary>
                 <ul>{[...new Set(entry.payload.tools.map((tool) => toolLabels[tool.toLowerCase()] ?? "Live network tool"))].map((label) => <li key={label}>{label}</li>)}</ul>
               </details>
             )}
-            {entry.payload?.journey && (
+            {!passenger && entry.payload?.journey && (
               <JourneyCards
-                passenger={kind === "passenger"}
+                passenger={false}
                 result={entry.payload.journey}
                 network={network}
                 currentGeneration={currentGeneration}
                 currentScenarioId={currentScenarioId}
               />
             )}
-            {entry.payload?.arrivals && network && currentScenarioId !== undefined && currentGeneration !== undefined && (
+            {!passenger && entry.payload?.arrivals && network && currentScenarioId !== undefined && currentGeneration !== undefined && (
               <section className="assistant-arrivals" aria-label="Assistant station arrivals">
                 <h3>{stationName(network, entry.payload.arrivals.stationId)} arrivals</h3>
                 <StationBoardView
-                  passenger={kind === "passenger"}
+                  passenger={false}
                   board={entry.payload.arrivals}
                   network={network}
                   scenarioId={currentScenarioId}
@@ -257,8 +211,8 @@ export function AssistantPanel({
                 />
               </section>
             )}
-            {entry.payload?.comparison && <ComparisonCard comparison={entry.payload.comparison} currentScenarioId={currentScenarioId} currentGeneration={currentGeneration} />}
-            {entry.payload?.proposal && (
+            {!passenger && entry.payload?.comparison && <ComparisonCard comparison={entry.payload.comparison} currentScenarioId={currentScenarioId} currentGeneration={currentGeneration} />}
+            {!passenger && entry.payload?.proposal && (
               <div className="proposal-card">
                 <span className="eyebrow">Action proposal</span>
                 <h3>{titleCase(entry.payload.proposal.action.kind)}</h3>
@@ -268,9 +222,7 @@ export function AssistantPanel({
                   <div><dt>Value</dt><dd>{entry.payload.proposal.action.value ?? entry.payload.proposal.action.amount ?? "—"}</dd></div>
                   <div><dt>Status</dt><dd>{approvalState[entry.payload.proposal.id] ?? titleCase(entry.payload.proposal.status)}</dd></div>
                 </dl>
-                {kind === "operations" && (
-                  <button className="primary-button" onClick={() => void approve(entry.payload!.proposal!)}>Approve and revalidate</button>
-                )}
+                <button className="primary-button" onClick={() => void approve(entry.payload!.proposal!)}>Approve and revalidate</button>
               </div>
             )}
           </article>
@@ -306,24 +258,16 @@ export function AssistantPanel({
               {recording ? "Stop recording" : "Start recording"}
             </button>
           )}
-          {canConverse && (
-            <button type="button" className="signal-voice-control" aria-pressed={voiceConversation}
-              onClick={toggleVoiceConversation} disabled={captureBusy && !voiceConversation}>
-              Voice conversation
-            </button>
-          )}
           <button className="primary-button" onClick={() => void send(input.trim())} disabled={!enabled || submitting || captureBusy || !input.trim()}>
             {submitting ? "Working…" : "Send"}
           </button>
         </div>
-        {(voice.canRecord || voice.canPlay) && (
+        {voice.canRecord && (
           <div className="signal-voice-caption">
-            {voice.canPlay && <span id={voiceDisclosure}>AI-generated voice</span>}
             <span role="status">{voiceStatus}</span>
           </div>
         )}
-        {canConverse && voiceConversation && <small className="transcript-note">Recorded turns send automatically. You start the microphone each time.</small>}
-        {passenger && !voiceConversation && input.trim() && <small className="transcript-note">Check the words before sending.</small>}
+        {passenger && input.trim() && <small className="transcript-note">Check the words before sending.</small>}
       </div>
     </section>
   );
@@ -342,7 +286,7 @@ function SignalMark() {
   );
 }
 
-function VoiceIcon({ kind }: { kind: "microphone" | "speaker" | "stop" }) {
+function VoiceIcon({ kind }: { kind: "microphone" | "stop" }) {
   return (
     <svg className="signal-voice-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"
       strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
@@ -352,7 +296,7 @@ function VoiceIcon({ kind }: { kind: "microphone" | "speaker" | "stop" }) {
             <rect x="9" y="3" width="6" height="12" rx="3" />
             <path d="M6 11v1a6 6 0 0 0 12 0v-1M12 18v3m-3 0h6" />
           </>
-        ) : <path d="M3 9h4l5-4v14l-5-4H3V9Zm12.5-.5a5 5 0 0 1 0 7m3-10a9 9 0 0 1 0 13" />}
+        ) : null}
     </svg>
   );
 }

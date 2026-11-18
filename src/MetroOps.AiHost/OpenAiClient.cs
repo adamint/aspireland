@@ -48,6 +48,7 @@ internal sealed class OpenAiClient(OpenAiSettings settings, OpenAIClient? client
                 BinaryData.FromString(definition.Parameters.GetRawText()), strictModeEnabled: false, definition.Description));
         var names = tools.Definitions.Select(tool => tool.Name).ToHashSet(StringComparer.Ordinal);
         var capture = new AssistantCapture(request.JourneyContext, AiEndpoints.ResolveViewerTimeZone(request.ViewerTimeZone));
+        var passenger = tools is PassengerToolRegistry;
         var iterations = 0;
         var calls = 0;
         while (true)
@@ -68,7 +69,7 @@ internal sealed class OpenAiClient(OpenAiSettings settings, OpenAIClient? client
                 var text = completion.GetOutputText().Trim();
                 if (text.Length == 0)
                     throw new OpenAiProviderException("OpenAI returned an empty assistant response.");
-                return capture.BuildResponse(text);
+                return capture.BuildResponse(text, passenger);
             }
 
             calls += toolCalls.Length;
@@ -83,7 +84,7 @@ internal sealed class OpenAiClient(OpenAiSettings settings, OpenAIClient? client
                 using var toolActivity = ActivitySource.StartActivity("metroops.ai.tool", ActivityKind.Internal);
                 toolActivity?.SetTag("tool.name", call.FunctionName);
                 var result = await tools.ExecuteAsync(call.FunctionName, call.FunctionArguments.ToString(), capture, cancellationToken);
-                if (capture.Clarification is not null) return capture.BuildResponse("");
+                if (capture.Clarification is not null) return capture.BuildResponse("", passenger);
                 options.InputItems.Add(ResponseItem.CreateFunctionCallOutputItem(call.CallId, result));
             }
         }

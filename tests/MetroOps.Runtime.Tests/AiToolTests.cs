@@ -47,8 +47,15 @@ public sealed class AiToolTests
 
         Assert.Same(board, response.Arrivals);
         Assert.Contains("Airport", response.Text);
+        Assert.Contains("Union Terminal", response.Text);
+        Assert.Contains("5 minutes", response.Text);
+        Assert.DoesNotContain("simulation", response.Text);
         Assert.DoesNotContain("Terminal 2", response.Text);
         Assert.DoesNotContain("**", response.Text);
+        capture.Arrivals = board with { Stale = true };
+        var stale = capture.BuildResponse("A train is arriving now.");
+        Assert.Contains("out of date", stale.Text);
+        Assert.DoesNotContain("5 minutes", stale.Text);
     }
 
     [Fact]
@@ -76,7 +83,13 @@ public sealed class AiToolTests
         Assert.Contains("rider's language", passenger);
         Assert.Contains("Do not imply live status without fresh tool evidence", passenger);
         Assert.Contains("You cannot dispatch trains", passenger);
+        Assert.Contains("answer itself", passenger);
+        Assert.Contains("skip a routine introduction", passenger);
+        Assert.DoesNotContain("journey cards are rendered separately", passenger);
+        Assert.DoesNotContain("explain that Aspireland data is simulated", passenger);
         Assert.DoesNotContain("Signal", dispatch);
+        Assert.Contains("Arrival boards and journey cards are rendered separately", dispatch);
+        Assert.Contains("explain that Aspireland data is simulated", dispatch);
         Assert.Contains("Approval mode requires the separate human approval API", dispatch);
     }
 
@@ -87,7 +100,12 @@ public sealed class AiToolTests
         var capture = new AssistantCapture(null, AiEndpoints.ResolveViewerTimeZone("America/New_York"))
         {
             Journey = new("scenario", 1, 2, departure, new("university", "airport", true),
-                [new() { TotalSeconds = 1800, ArrivesAt = departure.AddMinutes(30), Accessible = true }])
+                [new()
+                {
+                    TotalSeconds = 1800, ArrivesAt = departure.AddMinutes(30), Accessible = true,
+                    Legs = [new() { Line = "AX", From = "union-terminal", To = "airport", Destination = "airport", WaitSeconds = 120 }],
+                    Warnings = ["Allow extra time for the lift."]
+                }])
         };
 
         var response = capture.BuildResponse("Take a fictional train at 11:34 AM.");
@@ -96,6 +114,12 @@ public sealed class AiToolTests
         Assert.Contains("30 minutes", response.Text);
         Assert.Contains("7:04 AM", response.Text);
         Assert.Contains("America/New_York", response.Text);
+        Assert.Contains("Airport Express", response.Text);
+        Assert.Contains("Union Terminal", response.Text);
+        Assert.Contains("wait about 2 minutes", response.Text);
+        Assert.Contains("Allow extra time for the lift.", response.Text);
+        Assert.DoesNotContain("card", response.Text);
+        Assert.DoesNotContain("simulated", response.Text);
         Assert.DoesNotContain("fictional", response.Text);
         Assert.Same(capture.Journey, response.Journey);
     }

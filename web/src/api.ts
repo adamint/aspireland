@@ -86,22 +86,4 @@ export const api = {
     form.append("file", file, "aspireland-recording.webm");
     return request<{ text: string }>("/api/transcribe", { method: "POST", body: form });
   },
-  speech: async (text: string) => {
-    const response = await fetch("/api/speech", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    });
-    if (!response.ok) {
-      let message = "Speech is unavailable.";
-      try {
-        const body = (await response.json()) as { error?: string };
-        if (body.error) message = body.error;
-      } catch {
-        // Keep the generic message for non-JSON failures.
-      }
-      throw new ApiError(message, response.status);
-    }
-    return response.blob();
-  },
 };
