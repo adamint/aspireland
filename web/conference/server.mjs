@@ -39,6 +39,15 @@ const date = (value) => {
     Number.isFinite(Date.parse(value)));
   return value;
 };
+
+function sameDepartureTime(left, right) {
+  if (left === right) return true;
+  if (left === null || right === null) return false;
+  // Date.parse drops sub-millisecond precision, but .NET keeps up to seven digits.
+  const fraction = (value) => (/\.(\d+)/.exec(value)?.[1] ?? "").padEnd(7, "0");
+  return Date.parse(left) === Date.parse(right) && fraction(left) === fraction(right);
+}
+
 const stationId = (value) => { check(typeof value === "string" && stationPattern.test(value)); return value; };
 const nullable = (validate) => (value) => value == null ? null : validate(value);
 const list = (validate, max = 1000) => (value) => {
@@ -386,7 +395,9 @@ export async function createPassengerServer({
         } catch { throw new HttpError(400, "Invalid journey request."); }
         json(200, await upstreamRead(target, JSON.stringify(request), (data) => {
           const result = journeyShape(data);
-          check(JSON.stringify(result.request) === JSON.stringify(request));
+          const echo = result.request;
+          check(echo.origin === request.origin && echo.destination === request.destination &&
+            echo.accessible === request.accessible && sameDepartureTime(echo.departureTime, request.departureTime));
           return result;
         }));
       } else if (boardMatch || stationMatch) {

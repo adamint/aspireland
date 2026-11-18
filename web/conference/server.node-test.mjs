@@ -266,6 +266,32 @@ test("sanitizes arrival boards and ordinary journey payloads and forwards only f
   assert.equal(forwarded.headers.cookie, undefined);
 });
 
+test("validates the echoed journey departure by instant", async (t) => {
+  const f = await fixture(t);
+  const cases = [
+    ["2026-11-17T08:00:00.000Z", "2026-11-17T08:00:00+00:00", 200],
+    ["2026-11-17T08:00:00.1234000Z", "2026-11-17T03:00:00.1234-05:00", 200],
+    ["2026-11-17T08:00:00.1234001Z", "2026-11-17T08:00:00.1234002+00:00", 502],
+    ["2026-11-17T08:00:00.000Z", "2026-11-17T08:00:01+00:00", 502],
+    ["2026-11-17T08:00:00.000Z", null, 502],
+    [null, "2026-11-17T08:00:00+00:00", 502],
+  ];
+  for (const [departureTime, echoedTime, status] of cases) {
+    await t.test(`${departureTime} -> ${echoedTime} yields ${status}`, async () => {
+      f.setHandler((_, res) => {
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ ...journey(), request: { ...journeyRequest, departureTime: echoedTime } }));
+      });
+      const response = await rawRequest(f.origin, "/api/journeys", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...journeyRequest, departureTime }),
+      });
+      assert.equal(response.status, status);
+      if (status === 200) assert.equal(JSON.parse(response.text).request.departureTime, echoedTime);
+    });
+  }
+});
+
 test("AI and voice are explicitly disabled and all operator mutations are denied locally", async (t) => {
   const f = await fixture(t);
   const capabilities = await (await fetch(`${f.origin}/api/capabilities`)).json();
