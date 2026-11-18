@@ -83,6 +83,14 @@ AI and voice are disabled for attendees. No redirect from HTTP is configured;
 share the HTTPS URL. If you add a tunnel as a temporary front door, it must
 point to this same attendee origin only, never to the underlying services.
 
+If you're using Dev Tunnels, set `ATTENDEE_URL` to the attendee HTTPS URL
+printed by `devtunnel host`. Run this from the repository root to write a
+QR code for your slide:
+
+```sh
+uv run --script scripts/attendee-qr.py "$ATTENDEE_URL" --output attendee-qr.png
+```
+
 ## Check from outside
 
 Open `https://$DEMO_HOST` in a signed-out browser off the host. Plan an
