@@ -1,7 +1,9 @@
 using System.Text.Json;
 using System.Security.Cryptography;
 using System.Text;
+using System.ClientModel.Primitives;
 using Azure.Identity;
+using Microsoft.Extensions.Azure;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using MetroOps.Contracts;
@@ -27,7 +29,11 @@ public static class AiEndpoints
             {
                 options.EnableSensitiveTelemetryData = false;
                 options.Credential = new AzureCliCredential(new AzureCliCredentialOptions { TenantId = settings.AzureTenantId });
-            });
+            }, client => client.ConfigureOptions(options =>
+            {
+                if (settings.TranscriptionEnabled)
+                    options.AddPolicy(new DeploymentTranscriptionPolicy(settings.TranscriptionModel), PipelinePosition.PerCall);
+            }));
         builder.Services.AddOpenTelemetry()
             .WithTracing(tracing => tracing.AddSource("OpenAI.*"))
             .WithMetrics(metrics => metrics.AddMeter("OpenAI.*"));

@@ -27,6 +27,14 @@ var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOpt
     Args = args,
     DashboardApplicationName = "Aspireland MetroOps"
 });
+var privateModelInputs = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+{
+    "ConnectionStrings:chat", "ConnectionStrings:transcription", "ConnectionStrings:speech", "Azure:TenantId"
+};
+// Configuration has captured these inputs; child processes must not inherit them.
+foreach (var name in Environment.GetEnvironmentVariables().Keys.Cast<string>())
+    if (privateModelInputs.Contains(name.Replace("__", ":")))
+        Environment.SetEnvironmentVariable(name, null);
 const string demoCommandClient = "demo-read";
 builder.Services.AddHttpClient(demoCommandClient, client => client.Timeout = TimeSpan.FromSeconds(5));
 

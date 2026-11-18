@@ -49,7 +49,7 @@ public sealed class AiBoundaryTests
             using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(token));
             offeredTools = body.RootElement.GetProperty("tools").Clone();
             return JsonResponse("""
-                {"id":"test","object":"chat.completion","created":1,"model":"gpt41","choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":"attempt","type":"function","function":{"name":"execute_action","arguments":"{}"}}]}}]}
+                {"id":"resp-attempt","object":"response","created_at":1,"model":"gpt-5-mini","status":"completed","output":[{"id":"fc-attempt","type":"function_call","status":"completed","call_id":"attempt","name":"execute_action","arguments":"{}"}]}
                 """);
         }));
         await using var app = await AiApp(modelHttp);
@@ -60,7 +60,7 @@ public sealed class AiBoundaryTests
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
         Assert.Contains("unsupported tool call", await response.Content.ReadAsStringAsync());
-        var names = offeredTools.EnumerateArray().Select(tool => tool.GetProperty("function").GetProperty("name").GetString()).ToArray();
+        var names = offeredTools.EnumerateArray().Select(tool => tool.GetProperty("name").GetString()).ToArray();
         Assert.Contains("plan_journey", names);
         Assert.DoesNotContain("execute_action", names);
         Assert.DoesNotContain("propose_action", names);

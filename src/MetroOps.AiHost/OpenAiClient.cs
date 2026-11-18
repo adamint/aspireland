@@ -5,8 +5,7 @@ using Azure.Identity;
 using MetroOps.Contracts;
 using OpenAI;
 using OpenAI.Audio;
-using OpenAI.Chat;
-using ChatMessage = OpenAI.Chat.ChatMessage;
+using OpenAI.Responses;
 
 namespace MetroOps.AiHost;
 
@@ -18,6 +17,7 @@ internal sealed class OpenAiClient(OpenAiSettings settings, OpenAIClient? client
     private static readonly ActivitySource ActivitySource = new("MetroOps.AI");
     private OpenAIClient Client => client ?? throw new AiUnavailableException("The Foundry OpenAI client is not configured.");
 
+#pragma warning disable OPENAI001 // Responses is experimental in the pinned OpenAI SDK.
     public async Task<AssistantResponse> CompleteAsync(
         AssistantRequest request,
         string systemPrompt,
@@ -26,23 +26,26 @@ internal sealed class OpenAiClient(OpenAiSettings settings, OpenAIClient? client
     {
         EnsureAvailable(settings.TextEnabled, "Text assistance");
         using var activity = StartActivity("chat", settings.TextModel);
-        var messages = new List<ChatMessage> { new SystemChatMessage(systemPrompt) };
-        if (request.History is not null)
-            foreach (var message in request.History)
-                messages.Add(message.Role.Equals("user", StringComparison.OrdinalIgnoreCase)
-                    ? new UserChatMessage(message.Content)
-                    : new AssistantChatMessage(message.Content));
-        messages.Add(new UserChatMessage(request.Message));
-
-        var options = new ChatCompletionOptions
+        var options = new CreateResponseOptions
         {
-            AllowParallelToolCalls = false,
+            Model = settings.TextModel,
+            Instructions = systemPrompt,
+            ParallelToolCallsEnabled = false,
             MaxOutputTokenCount = 1200,
+            ReasoningOptions = new() { ReasoningEffortLevel = ResponseReasoningEffortLevel.Minimal },
             StoredOutputEnabled = false
         };
+        options.IncludedProperties.Add(IncludedResponseProperty.ReasoningEncryptedContent);
+        if (request.History is not null)
+            foreach (var message in request.History)
+                options.InputItems.Add(message.Role.Equals("user", StringComparison.OrdinalIgnoreCase)
+                    ? ResponseItem.CreateUserMessageItem(message.Content)
+                    : ResponseItem.CreateAssistantMessageItem(message.Content));
+        options.InputItems.Add(ResponseItem.CreateUserMessageItem(request.Message));
+
         foreach (var definition in tools.Definitions)
-            options.Tools.Add(ChatTool.CreateFunctionTool(definition.Name, definition.Description,
-                BinaryData.FromString(definition.Parameters.GetRawText())));
+            options.Tools.Add(ResponseTool.CreateFunctionTool(definition.Name,
+                BinaryData.FromString(definition.Parameters.GetRawText()), strictModeEnabled: false, definition.Description));
         var names = tools.Definitions.Select(tool => tool.Name).ToHashSet(StringComparer.Ordinal);
         var capture = new AssistantCapture(request.JourneyContext, AiEndpoints.ResolveViewerTimeZone(request.ViewerTimeZone));
         var iterations = 0;
@@ -50,32 +53,42 @@ internal sealed class OpenAiClient(OpenAiSettings settings, OpenAIClient? client
         while (true)
         {
             var completion = await InvokeAsync(async token =>
-                (await Client.GetChatClient(settings.TextModel).CompleteChatAsync(messages, options, token)).Value,
+                (await Client.GetResponsesClient().CreateResponseAsync(options, token)).Value,
                 cancellationToken);
-            if (completion.ToolCalls.Count == 0)
+            if (completion.Status != ResponseStatus.Completed)
             {
-                var text = string.Concat(completion.Content.Select(part => part.Text)).Trim();
+                var reason = completion.IncompleteStatusDetails?.Reason?.ToString() ?? completion.Status?.ToString() ?? "unknown status";
+                throw new OpenAiProviderException($"OpenAI did not complete the assistant response ({reason}).");
+            }
+            if (completion.OutputItems.Any(item => item is not (MessageResponseItem or ReasoningResponseItem or FunctionCallResponseItem)))
+                throw new OpenAiProviderException("OpenAI returned an unsupported tool call.");
+            var toolCalls = completion.OutputItems.OfType<FunctionCallResponseItem>().ToArray();
+            if (toolCalls.Length == 0)
+            {
+                var text = completion.GetOutputText().Trim();
                 if (text.Length == 0)
                     throw new OpenAiProviderException("OpenAI returned an empty assistant response.");
                 return capture.BuildResponse(text);
             }
 
-            calls += completion.ToolCalls.Count;
+            calls += toolCalls.Length;
             if (++iterations > MaxToolIterations || calls > MaxToolCalls)
                 throw new OpenAiProviderException("The assistant exceeded the tool-call limit.");
-            messages.Add(new AssistantChatMessage(completion));
-            foreach (var call in completion.ToolCalls)
+            // Non-stored tool rounds must replay reasoning and call items, not just text.
+            foreach (var item in completion.OutputItems) options.InputItems.Add(item);
+            foreach (var call in toolCalls)
             {
-                if (call.Kind != ChatToolCallKind.Function || !names.Contains(call.FunctionName))
+                if (!names.Contains(call.FunctionName))
                     throw new OpenAiProviderException("OpenAI returned an unsupported tool call.");
                 using var toolActivity = ActivitySource.StartActivity("metroops.ai.tool", ActivityKind.Internal);
                 toolActivity?.SetTag("tool.name", call.FunctionName);
                 var result = await tools.ExecuteAsync(call.FunctionName, call.FunctionArguments.ToString(), capture, cancellationToken);
                 if (capture.Clarification is not null) return capture.BuildResponse("");
-                messages.Add(new ToolChatMessage(call.Id, result));
+                options.InputItems.Add(ResponseItem.CreateFunctionCallOutputItem(call.CallId, result));
             }
         }
     }
+#pragma warning restore OPENAI001
 
     public async Task<TranscriptionResult> TranscribeAsync(Stream audio, string contentType, CancellationToken cancellationToken)
     {

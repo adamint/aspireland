@@ -58,11 +58,40 @@ or a model API path. All three deployments must belong to that same account.
 Keep configuration outside Git, preferably in the AppHost's private user secrets
 or a scoped private launcher. Only `ai-operations` gets the model references and
 tenant; the passenger gateway and web resources don't get model credentials.
+The AppHost removes these launch-environment inputs after configuration loads,
+then supplies references explicitly to the AI process so other services can't
+inherit the connection strings.
 Missing deployments leave their corresponding Signal capabilities disabled.
 
 The calling Entra identity needs account-scoped inference access. Allow time for
 new role assignments to propagate and verify a real inference call before treating
 Signal as ready; an ARM deployment success isn't a data-plane check.
+
+## Provider API compatibility
+
+Text uses `/openai/v1/responses`, not Chat Completions. Each request sets
+`store:false` and disables parallel tool calls. Tool rounds replay the complete
+output items, including IDs and encrypted reasoning, with tool results joined
+by `call_id`. This state stays in request-local memory; the app doesn't create
+stored provider conversations or capture content in telemetry. The typed
+Responses API is still marked experimental in the pinned OpenAI SDK; its
+`OPENAI001` suppression is limited to the text adapter.
+
+GPT-5 mini uses `reasoning.effort:minimal` within the existing 1,200-output-token
+limit. Its default reasoning effort can exhaust that budget before returning an
+answer to the app's tool results. Incomplete responses fail closed without running
+their tools or presenting a successful answer.
+
+GPT-4o Mini Transcribe uses the supported deployment-scoped
+`/openai/deployments/{deployment}/audio/transcriptions?api-version=2025-03-01-preview`.
+A scoped SDK pipeline policy preserves the configured HTTPS account and Entra
+authentication while adapting that path. Speech keeps `/openai/v1/audio/speech`.
+There is no public-provider or alternate-account fallback.
+
+Check the deployment's effective request and token limits before a demo.
+Provisioning at capacity 1 doesn't guarantee enough allocation for a complete
+tool-backed answer: one question can require several model requests. Rate-limit
+failures stay visible rather than becoming fabricated answers.
 
 ## Try Signal
 
