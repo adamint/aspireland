@@ -42,6 +42,15 @@ is observable; prompts, responses and audio aren't captured in telemetry.
 
 Try “What's the fastest accessible route from University to the airport?” on
 the passenger site, or “Why are Central Exchange queues growing?” in Dispatch.
-Voice is push-to-talk. To turn Foundry off, stop the AppHost and restart with
+Signal is the passenger guide. Tap the microphone to start recording and tap
+again to stop. By default, the transcript goes into the draft so you can edit
+it before sending. Use a reply's speaker button to listen to that reply or
+stop it.
+
+Turn on **Voice conversation** to send each recorded turn after transcription
+and hear Signal's AI-generated reply. You still start and stop the microphone
+each turn. Typed messages don't play automatically.
+
+To turn Foundry off, stop the AppHost and restart with
 `MetroOps__ProvisionFoundry=false`. Stopping Aspire doesn't delete the Azure
 resources. Remove them separately when you no longer need them.
