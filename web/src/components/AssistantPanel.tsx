@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { stationName, titleCase, viewerTimeZone } from "../format";
 import type {
@@ -14,6 +14,8 @@ import { JourneyCards } from "./JourneyCards";
 import { SafeMarkdown } from "./SafeMarkdown";
 import { StationBoardView } from "./StationBoardView";
 import { TransitMark } from "./TransitBrand";
+import { useAssistantVoice } from "./useAssistantVoice";
+import "./assistant-voice.css";
 
 const toolLabels: Record<string, string> = {
   resolve_station: "Station lookup",
@@ -56,21 +58,24 @@ export function AssistantPanel({
 }: AssistantPanelProps) {
   const [entries, setEntries] = useState<ConversationEntry[]>([]);
   const [input, setInput] = useState("");
-  const [journeyContext, setJourneyContext] = useState<JourneyRequest | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [recording, setRecording] = useState(false);
-  const [transcribing, setTranscribing] = useState(false);
-  const [speak, setSpeak] = useState(false);
-  const [audioError, setAudioError] = useState<string | null>(null);
+  const [voiceConversation, setVoiceConversation] = useState(false);
   const [approvalState, setApprovalState] = useState<Record<string, string>>({});
-  const recorder = useRef<MediaRecorder | null>(null);
-  const chunks = useRef<Blob[]>([]);
-  const audio = useRef<HTMLAudioElement | null>(null);
+  const journeyContext = useRef<JourneyRequest | null>(null);
+  const pendingVoiceReply = useRef<string | null>(null);
+  const voiceMode = useRef(false);
   const conversation = useRef<HTMLDivElement | null>(null);
   const hasConversationUpdate = useRef(false);
+  const voiceDisclosure = useId();
+  const passenger = kind === "passenger";
+  const enabled = capabilities?.text === true;
+  const voice = useAssistantVoice(passenger && enabled && capabilities.transcription, passenger && enabled && capabilities.speech);
+  const canConverse = voice.canRecord && voice.canPlay;
+  const captureBusy = voice.captureStatus !== "idle";
+  const recording = voice.captureStatus === "recording";
 
-  useEffect(() => setJourneyContext(null), [currentGeneration, currentScenarioId]);
+  useEffect(() => { journeyContext.current = null; }, [currentGeneration, currentScenarioId]);
   useEffect(() => {
     if (!hasConversationUpdate.current) {
       hasConversationUpdate.current = true;
@@ -80,105 +85,69 @@ export function AssistantPanel({
     if (!container) return;
     container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
   }, [entries, submitting]);
-  useEffect(() => () => {
-    recorder.current?.stream.getTracks().forEach((track) => track.stop());
-    audio.current?.pause();
-    if (audio.current?.src) URL.revokeObjectURL(audio.current.src);
-  }, []);
-
-  const playSpeech = async (text: string) => {
-    if (!speak || !capabilities?.speech) return;
-    try {
-      setAudioError(null);
-      audio.current?.pause();
-      if (audio.current?.src) URL.revokeObjectURL(audio.current.src);
-      const blob = await api.speech(text);
-      const url = URL.createObjectURL(blob);
-      audio.current = new Audio(url);
-      await audio.current.play();
-    } catch (speechError) {
-      setAudioError(speechError instanceof Error ? speechError.message : "Speech playback is unavailable.");
+  useLayoutEffect(() => {
+    if (!canConverse) {
+      voiceMode.current = false;
+      setVoiceConversation(false);
+      voice.stopConversationPlayback();
     }
+    return () => { pendingVoiceReply.current = null; };
+  }, [canConverse]);
+
+  const appendDraft = (text: string) => {
+    setInput((draft) => draft.trim() ? `${draft}\n${text}` : text);
   };
 
-  const send = async () => {
-    const message = input.trim();
-    if (!message || submitting) return;
+  const send = async (message: string, fromRecording = false) => {
+    if (!enabled || !message || submitting) return;
     const userEntry: ConversationEntry = { id: crypto.randomUUID(), role: "user", text: message };
     const recent: ChatMessage[] = [...entries, userEntry].slice(-8).map((entry) => ({
       role: entry.role,
       content: entry.text,
     }));
     setEntries((current) => [...current, userEntry]);
-    setInput("");
+    if (fromRecording) pendingVoiceReply.current = userEntry.id;
+    else setInput("");
     setSubmitting(true);
     setError(null);
     try {
       const response = await api.assistant({
         message,
         history: recent,
-        journeyContext,
+        journeyContext: journeyContext.current,
         viewerTimeZone: viewerTimeZone(),
       });
-      setEntries((current) => [
-        ...current,
-        { id: crypto.randomUUID(), role: "assistant", text: response.text, payload: response },
-      ]);
-      if (response.journeyContext) setJourneyContext(response.journeyContext);
-      await playSpeech(response.text);
+      const replyId = crypto.randomUUID();
+      setEntries((current) => [...current, { id: replyId, role: "assistant", text: response.text, payload: response }]);
+      if (response.journeyContext) journeyContext.current = response.journeyContext;
+      if (pendingVoiceReply.current === userEntry.id) void voice.playReply(replyId, response.text, "conversation");
     } catch (assistantError) {
       setError(assistantError instanceof Error ? assistantError.message : "The assistant is unavailable.");
+      if (fromRecording) appendDraft(message);
     } finally {
+      if (pendingVoiceReply.current === userEntry.id) pendingVoiceReply.current = null;
       setSubmitting(false);
     }
   };
 
-  const startRecording = async () => {
-    setAudioError(null);
-    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
-      setAudioError("This browser does not support microphone recording. You can still type your question.");
-      return;
-    }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream);
-      chunks.current = [];
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size) chunks.current.push(event.data);
-      };
-      mediaRecorder.onstop = async () => {
-        stream.getTracks().forEach((track) => track.stop());
-        const blob = new Blob(chunks.current, { type: mediaRecorder.mimeType || "audio/webm" });
-        setRecording(false);
-        setTranscribing(true);
-        try {
-          const result = await api.transcribe(blob);
-          setInput(result.text);
-        } catch (transcriptionError) {
-          setAudioError(transcriptionError instanceof Error ? transcriptionError.message : "Transcription failed.");
-        } finally {
-          setTranscribing(false);
-        }
-      };
-      recorder.current = mediaRecorder;
-      mediaRecorder.start();
-      setRecording(true);
-    } catch (microphoneError) {
-      setAudioError(
-        microphoneError instanceof Error
-          ? `Microphone unavailable: ${microphoneError.message}. You can still type your question.`
-          : "Microphone permission was not granted. You can still type your question.",
-      );
+  const toggleVoiceConversation = () => {
+    voiceMode.current = !voiceMode.current;
+    setVoiceConversation(voiceMode.current);
+    if (!voiceMode.current) {
+      pendingVoiceReply.current = null;
+      voice.stopConversationPlayback();
     }
   };
 
-  const stopRecording = () => {
-    if (recorder.current?.state === "recording") recorder.current.stop();
-  };
-
-  const stopAudio = () => {
-    audio.current?.pause();
-    if (audio.current) audio.current.currentTime = 0;
+  const tapMicrophone = () => {
+    if (recording) {
+      voice.stopRecording((text) => {
+        if (voiceMode.current) void send(text, true);
+        else appendDraft(text);
+      });
+    } else {
+      void voice.startRecording();
+    }
   };
 
   const approve = async (proposal: ActionProposal) => {
@@ -195,14 +164,19 @@ export function AssistantPanel({
     }
   };
 
-  const enabled = capabilities?.text === true;
+  const voiceStatus = recording ? "Recording…"
+    : voice.captureStatus === "requesting" ? "Waiting for microphone permission…"
+    : voice.captureStatus === "transcribing" ? "Transcribing…"
+    : voice.playback?.playing ? "Playing reply…"
+    : voice.playback ? "Preparing reply audio…" : "";
+  let replyNumber = 0;
   return (
     <section className={`assistant-panel assistant-panel--${kind}`} aria-label={`${kind} assistant`}>
       <header className="assistant-header">
-        {kind === "passenger" && <TransitMark />}
+        {passenger && <SignalMark />}
         <div>
-          {kind === "passenger" && <span className="eyebrow">Journey assistant</span>}
-          <h2>{kind === "operations" ? "Dispatch assistant" : "Ask Aspireland"}</h2>
+          <h2>{passenger ? "Signal" : "Dispatch assistant"}</h2>
+          {passenger && <span className="signal-subtitle">Your trip guide</span>}
         </div>
         <span className={`provider-status ${enabled ? "online" : "offline"}`} title={kind === "operations" ? capabilities?.provider : undefined}>
           {kind === "operations" ? enabled ? "Connected" : "AI unavailable" : enabled ? "Chat available" : "Chat unavailable"}
@@ -232,7 +206,26 @@ export function AssistantPanel({
         )}
         {entries.map((entry) => (
           <article key={entry.id} className={`message message--${entry.role}`}>
-            <div className="message-label">{entry.role === "user" ? "You" : "Aspireland"}</div>
+            <div className={entry.role === "assistant" && voice.canPlay ? "signal-reply-header" : undefined}>
+              <div className="message-label">{entry.role === "user" ? "You" : passenger ? "Signal" : "Aspireland"}</div>
+              {entry.role === "assistant" && voice.canPlay && (
+                <button
+                  type="button"
+                  className="signal-voice-control signal-speaker"
+                  aria-label={`Read reply ${++replyNumber} aloud`}
+                  aria-pressed={voice.playback?.replyId === entry.id}
+                  aria-describedby={voiceDisclosure}
+                  title={voice.playback?.replyId === entry.id ? "Stop reply audio" : "Read reply aloud"}
+                  disabled={captureBusy}
+                  onClick={() => {
+                    pendingVoiceReply.current = null;
+                    void voice.playReply(entry.id, entry.text);
+                  }}
+                >
+                  <VoiceIcon kind={voice.playback?.replyId === entry.id ? "stop" : "speaker"} />
+                </button>
+              )}
+            </div>
             {entry.role === "assistant" ? <SafeMarkdown text={entry.text} /> : <p>{entry.text}</p>}
             {entry.payload?.tools && entry.payload.tools.length > 0 && (
               <details className="tool-provenance">
@@ -286,7 +279,7 @@ export function AssistantPanel({
       </div>
 
       {error && <div className="notice notice--error">{error}</div>}
-      {audioError && <div className="notice notice--warning">{audioError}</div>}
+      {passenger && voice.audioError && <div className="notice notice--warning" role="alert">{voice.audioError}</div>}
 
       <div className="assistant-composer">
         <label>
@@ -295,9 +288,9 @@ export function AssistantPanel({
             value={input}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
+              if (event.key === "Enter" && !event.shiftKey && (!passenger || !event.nativeEvent.isComposing)) {
                 event.preventDefault();
-                void send();
+                if (!captureBusy) void send(input.trim());
               }
             }}
             placeholder={kind === "operations" ? "Why is Central Exchange backing up?" : "How do I get from University to the airport?"}
@@ -305,38 +298,61 @@ export function AssistantPanel({
             disabled={!enabled}
           />
         </label>
-        <div className="composer-actions">
-          {kind === "passenger" && (
-            <>
-              {!recording ? (
-                <button
-                  className="voice-button"
-                  onClick={() => void startRecording()}
-                  disabled={!capabilities?.transcription || transcribing}
-                >
-                  {transcribing ? "Transcribing…" : "Push to talk"}
-                </button>
-              ) : (
-                <button className="voice-button recording" onClick={stopRecording}>Stop recording</button>
-              )}
-              <label className="speak-toggle">
-                <input
-                  type="checkbox"
-                  checked={speak}
-                  onChange={(event) => setSpeak(event.target.checked)}
-                  disabled={!capabilities?.speech}
-                />
-                Read answers aloud <small>AI-generated voice</small>
-              </label>
-              <button className="text-button" onClick={stopAudio}>Stop audio</button>
-            </>
+        <div className={`composer-actions${passenger ? " signal-composer-actions" : ""}`}>
+          {voice.canRecord && (
+            <button type="button" className={`signal-voice-control${recording ? " signal-recording" : ""}`}
+              onClick={tapMicrophone} disabled={!recording && (captureBusy || submitting)}>
+              <VoiceIcon kind={recording ? "stop" : "microphone"} />
+              {recording ? "Stop recording" : "Start recording"}
+            </button>
           )}
-          <button className="primary-button" onClick={() => void send()} disabled={!enabled || submitting || !input.trim()}>
+          {canConverse && (
+            <button type="button" className="signal-voice-control" aria-pressed={voiceConversation}
+              onClick={toggleVoiceConversation} disabled={captureBusy && !voiceConversation}>
+              Voice conversation
+            </button>
+          )}
+          <button className="primary-button" onClick={() => void send(input.trim())} disabled={!enabled || submitting || captureBusy || !input.trim()}>
             {submitting ? "Working…" : "Send"}
           </button>
         </div>
-        {kind === "passenger" && input.trim() && <small className="transcript-note">Check the words before sending.</small>}
+        {(voice.canRecord || voice.canPlay) && (
+          <div className="signal-voice-caption">
+            {voice.canPlay && <span id={voiceDisclosure}>AI-generated voice</span>}
+            <span role="status">{voiceStatus}</span>
+          </div>
+        )}
+        {canConverse && voiceConversation && <small className="transcript-note">Recorded turns send automatically. You start the microphone each time.</small>}
+        {passenger && !voiceConversation && input.trim() && <small className="transcript-note">Check the words before sending.</small>}
       </div>
     </section>
+  );
+}
+
+function SignalMark() {
+  return (
+    <svg className="signal-mark" viewBox="0 0 40 40" aria-hidden="true" focusable="false">
+      <rect width="40" height="40" rx="9" fill="currentColor" />
+      <path d="M12 32l3-4m13 4-3-4M15 8h10a5 5 0 0 1 5 5v12a3 3 0 0 1-3 3H13a3 3 0 0 1-3-3V13a5 5 0 0 1 5-5Z"
+        fill="none" stroke="white" strokeWidth="1.8" strokeLinecap="round" />
+      <rect x="13.5" y="12" width="13" height="7" rx="2.5" fill="white" />
+      <circle cx="15" cy="23.5" r="1.25" fill="white" />
+      <circle cx="25" cy="23.5" r="1.25" fill="white" />
+    </svg>
+  );
+}
+
+function VoiceIcon({ kind }: { kind: "microphone" | "speaker" | "stop" }) {
+  return (
+    <svg className="signal-voice-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"
+      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+      {kind === "stop" ? <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" />
+        : kind === "microphone" ? (
+          <>
+            <rect x="9" y="3" width="6" height="12" rx="3" />
+            <path d="M6 11v1a6 6 0 0 0 12 0v-1M12 18v3m-3 0h6" />
+          </>
+        ) : <path d="M3 9h4l5-4v14l-5-4H3V9Zm12.5-.5a5 5 0 0 1 0 7m3-10a9 9 0 0 1 0 13" />}
+    </svg>
   );
 }

@@ -66,6 +66,21 @@ public sealed class AiToolTests
     }
 
     [Fact]
+    public void SignalPersonaAppliesOnlyToTheReadOnlyPassengerPrompt()
+    {
+        var passenger = AiEndpoints.BuildSystemPrompt("passenger", null, TimeZoneInfo.Utc);
+        var dispatch = AiEndpoints.BuildSystemPrompt("operator", null, TimeZoneInfo.Utc);
+
+        Assert.Contains("Signal", passenger);
+        Assert.Contains("read-only", passenger);
+        Assert.Contains("rider's language", passenger);
+        Assert.Contains("Do not imply live status without fresh tool evidence", passenger);
+        Assert.Contains("You cannot dispatch trains", passenger);
+        Assert.DoesNotContain("Signal", dispatch);
+        Assert.Contains("Approval mode requires the separate human approval API", dispatch);
+    }
+
+    [Fact]
     public void JourneyNarrationUsesActualLocalArrivalInsteadOfModelTimetable()
     {
         var departure = new DateTimeOffset(2026, 11, 17, 11, 34, 24, TimeSpan.Zero);

@@ -1,0 +1,78 @@
+.assistant-panel--passenger .signal-mark {
+  width: 40px;
+  height: 40px;
+  flex: none;
+  color: var(--brand);
+}
+
+.assistant-panel--passenger .signal-subtitle,
+.assistant-panel--passenger .signal-voice-caption {
+  color: var(--muted);
+  font-size: .8rem;
+}
+
+.assistant-panel--passenger .signal-composer-actions {
+  flex-wrap: wrap;
+}
+
+.assistant-panel--passenger .signal-voice-control {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 6px 9px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--sign-radius);
+  background: var(--paper);
+  color: var(--brand);
+}
+
+.assistant-panel--passenger .signal-voice-control:not(:disabled):hover,
+.assistant-panel--passenger .signal-voice-control[aria-pressed="true"] {
+  border-color: var(--brand);
+  background: var(--aspire-muted);
+}
+
+.assistant-panel--passenger .signal-voice-control:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.assistant-panel--passenger .signal-voice-control:disabled {
+  opacity: .6;
+}
+
+.assistant-panel--passenger .signal-voice-control.signal-recording {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.assistant-panel--passenger .signal-reply-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.assistant-panel--passenger .signal-reply-header .message-label {
+  margin: 0;
+}
+
+.assistant-panel--passenger .signal-speaker {
+  min-width: 44px;
+}
+
+.assistant-panel--passenger .signal-voice-icon {
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+
+.assistant-panel--passenger .signal-voice-caption {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
+  margin-top: 5px;
+}
