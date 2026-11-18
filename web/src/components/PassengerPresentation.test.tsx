@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { JourneyCards } from "./JourneyCards";
 import { StationBoardView } from "./StationBoardView";
@@ -79,22 +79,23 @@ it("uses passenger-facing station and platform labels in itinerary cards", () =>
 });
 
 it.each([
-  [60, 100, false, "Space available", "60 of 100 passenger capacity"],
-  [61, 100, false, "Busy", "61 of 100 passenger capacity"],
-  [85, 100, false, "Busy", "85 of 100 passenger capacity"],
-  [86, 100, false, "Very crowded", "86 of 100 passenger capacity"],
-  [0, 0, false, "Capacity not reported", "0 people onboard; passenger capacity not reported."],
-  [86, 100, true, "Live crowding unavailable", "Updates are delayed."],
-] as const)("gives rider crowding context for %s/%s (stale: %s)", (load, capacity, stale, label, detail) => {
+  [60, 100, false, "Space available"],
+  [61, 100, false, "Busy"],
+  [85, 100, false, "Busy"],
+  [86, 100, false, "Very crowded"],
+  [0, 0, false, "Capacity not reported"],
+  [86, 100, true, "Live crowding unavailable"],
+] as const)("keeps rider board crowding concise for %s/%s (stale: %s)", (load, capacity, stale, label) => {
   const board: StationBoard = { stationId: "university", scenarioId: "current", generation: 4, asOf: journey.asOf,
     updatedAt: journey.asOf, stale, restrictions: [],
     arrivals: [{ trainId: "green-1", line: "Green", service: "local", platform: "university:Green:+", destination: "southbank",
       seconds: 60, predictionKind: "live", status: "on-time", load, capacity }] };
   const view = render(<StationBoardView passenger board={board} network={network} scenarioId="current" generation={4} loading={false} error={null} />);
-  expect(screen.getByRole("columnheader", { name: "Onboard crowding" })).toBeTruthy();
-  expect(screen.getByText(label)).toBeTruthy();
-  expect(screen.getByText(detail)).toBeTruthy();
-  if (stale || capacity === 0) expect(view.container.querySelector(".load-meter")).toBeNull();
+  const crowding = screen.getAllByRole("cell")[3];
+  expect(within(crowding).queryByText(/passenger capacity|people onboard|Updates are delayed/)).toBeNull();
+  expect(view.container.querySelector(".load-meter")).toBeNull();
+  expect(screen.getByRole("columnheader", { name: "Crowding" })).toBeTruthy();
+  expect(crowding.textContent).toBe(`Crowding: ${label}`);
 });
 
 it("separates multi-stop travel, waits and exits without internal IDs", () => {

@@ -57,7 +57,7 @@ export function StationBoardView({
           <span role="columnheader">Service</span>
           <span role="columnheader">Destination / platform</span>
           <span role="columnheader">Arrival</span>
-          <span role="columnheader">{passenger ? "Onboard crowding" : "Crowding"}</span>
+          <span role="columnheader">Crowding</span>
         </div>
         {board.arrivals.map((arrival) => {
           const ratio = arrival.load / Math.max(1, arrival.capacity);
@@ -83,12 +83,8 @@ export function StationBoardView({
               </span>
               <span role="cell">
                 {passenger ? <>
-                  <span className="crowding-cell-title" aria-hidden="true">Onboard crowding: </span>
+                  <span className="crowding-cell-title" aria-hidden="true">Crowding: </span>
                   <strong>{crowding.label}</strong>
-                  {crowding.ratio !== null && <span aria-hidden="true" className={`load-meter ${crowding.ratio > 0.85 ? "critical" : crowding.ratio > 0.6 ? "busy" : ""}`}>
-                    <i style={{ width: `${Math.min(100, crowding.ratio * 100)}%` }} />
-                  </span>}
-                  <small>{crowding.detail}</small>
                 </> : <>
                   <span className={`load-meter ${ratio > 0.85 ? "critical" : ratio > 0.6 ? "busy" : ""}`}>
                     <i style={{ width: `${Math.min(100, ratio * 100)}%` }} />
