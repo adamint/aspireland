@@ -10,6 +10,9 @@ internal sealed record AssistantToolDefinition(string Name, string Description, 
 
 internal sealed class AssistantCapture(JourneyRequest? journeyContext, TimeZoneInfo? viewerTimeZone = null)
 {
+    private readonly List<JourneyResult> _passengerJourneys = [];
+    private bool _askReturnTime;
+
     public JourneyResult? Journey { get; set; }
     public ComparisonResult? Comparison { get; set; }
     public ActionProposal? Proposal { get; set; }
@@ -22,6 +25,15 @@ internal sealed class AssistantCapture(JourneyRequest? journeyContext, TimeZoneI
 
     public string LocalTime(DateTimeOffset time) =>
         TimeZoneInfo.ConvertTime(time, ViewerTimeZone).ToString("yyyy-MM-dd HH:mm:ss zzz", CultureInfo.InvariantCulture);
+
+    public void RecordPassengerJourney(JourneyResult journey, bool askReturnTime)
+    {
+        var index = _passengerJourneys.FindIndex(previous => previous.Request.Origin == journey.Request.Origin &&
+            previous.Request.Destination == journey.Request.Destination);
+        if (index >= 0) _passengerJourneys[index] = journey;
+        else if (_passengerJourneys.Count < 2) _passengerJourneys.Add(journey);
+        _askReturnTime |= askReturnTime;
+    }
 
     public AssistantResponse BuildResponse(string text, bool passenger = true)
     {
@@ -39,23 +51,28 @@ internal sealed class AssistantCapture(JourneyRequest? journeyContext, TimeZoneI
         }
         if (Journey is not null && Comparison is null && Proposal is null)
         {
-            if (Journey.Options.FirstOrDefault() is { } itinerary)
-            {
-                var arrival = TimeZoneInfo.ConvertTime(itinerary.ArrivesAt, ViewerTimeZone)
-                    .ToString("h:mm tt", CultureInfo.InvariantCulture);
-                var route = Journey.Request.Accessible ? "step-free route" : "route";
-                var duration = passenger ? TripMinutes(itinerary.TotalSeconds) : $"{Math.Ceiling(itinerary.TotalSeconds / 60)} minutes";
-                var summary = $"The {route} from {Network.Station(Journey.Request.Origin).Name} to {Network.Station(Journey.Request.Destination).Name} " +
-                    $"takes about {duration}, arriving at {arrival}";
-                text = passenger
-                    ? PassengerJourney(itinerary, $"{summary} ({ViewerTimeZone.Id}).")
-                    : $"{summary} ({ViewerTimeZone.Id}, simulated). The route card includes boarding waits and transfers.";
-                if (!passenger && itinerary.Warnings.Count > 0) text += " Check the estimate warnings on the card.";
-            }
-            else
-                text = Journey.Error ?? "No journey is currently available between those stations.";
+            text = passenger && _passengerJourneys.Count > 0
+                ? string.Join("\n\n", _passengerJourneys.Select(journey => DescribeJourney(journey, passenger: true)))
+                : DescribeJourney(Journey, passenger);
+            if (passenger && _askReturnTime && _passengerJourneys.Count == 1)
+                text += "\n\nWhat time would you like to head back?";
         }
         return new AssistantResponse(text, Journey, Comparison, Proposal, Tools.Count > 0 ? Tools : null, JourneyContext, Arrivals);
+    }
+
+    private string DescribeJourney(JourneyResult journey, bool passenger)
+    {
+        if (journey.Options.FirstOrDefault() is not { } itinerary)
+            return journey.Error ?? "No journey is currently available between those stations.";
+        var arrival = TimeZoneInfo.ConvertTime(itinerary.ArrivesAt, ViewerTimeZone)
+            .ToString("h:mm tt", CultureInfo.InvariantCulture);
+        var route = journey.Request.Accessible ? "step-free route" : "route";
+        var duration = passenger ? TripMinutes(itinerary.TotalSeconds) : $"{Math.Ceiling(itinerary.TotalSeconds / 60)} minutes";
+        var summary = $"The {route} from {Network.Station(journey.Request.Origin).Name} to {Network.Station(journey.Request.Destination).Name} " +
+            $"takes about {duration}, arriving at {arrival}";
+        if (passenger) return PassengerJourney(itinerary, $"{summary} ({ViewerTimeZone.Id}).");
+        var warning = itinerary.Warnings.Count > 0 ? " Check the estimate warnings on the card." : "";
+        return $"{summary} ({ViewerTimeZone.Id}, simulated). The route card includes boarding waits and transfers.{warning}";
     }
 
     private static string PassengerArrivals(StationBoard board, string station)
@@ -108,6 +125,7 @@ internal abstract class AssistantToolRegistry
     }
 
     public abstract IReadOnlyList<AssistantToolDefinition> Definitions { get; }
+    protected virtual bool IsPassenger => false;
 
     public async Task<string> ExecuteAsync(
         string name,
@@ -175,14 +193,15 @@ internal abstract class AssistantToolRegistry
                 return Serialize(await Services.GetSystemStatusAsync(cancellationToken));
             case "get_arrivals":
             {
-                var station = ResolveStationId(RequiredString(arguments, "station"));
-                if (station is null)
+                var lookup = StationResolution(RequiredString(arguments, "station"));
+                if (lookup.Station is null)
                 {
-                    return ResolveStation(arguments, capture, "station");
+                    Clarify(lookup, capture);
+                    return Serialize(lookup);
                 }
                 var board = await Services.GetAsync<StationBoard>(
                     "information",
-                    $"stations/{Uri.EscapeDataString(station)}/arrivals",
+                    $"stations/{Uri.EscapeDataString(lookup.Station.Id)}/arrivals",
                     "Passenger information service",
                     cancellationToken);
                 capture.Arrivals = board;
@@ -196,21 +215,22 @@ internal abstract class AssistantToolRegistry
                 {
                     return SerializeError("Origin and destination are required. Resolve ambiguous station names before planning.");
                 }
-                var origin = ResolveStationId(originText);
-                var destination = ResolveStationId(destinationText);
-                if (origin is null || destination is null)
+                var origin = StationResolution(originText);
+                var destination = StationResolution(destinationText);
+                if (origin.Station is null || destination.Station is null)
                 {
-                    Clarify(StationResolution(origin is null ? originText : destinationText), capture);
+                    Clarify(origin.Station is null ? origin : destination, capture);
                     return Serialize(new
                     {
                         ok = false,
                         error = "One or more station names need clarification.",
-                        origin = StationResolution(originText),
-                        destination = StationResolution(destinationText)
+                        origin,
+                        destination
                     });
                 }
 
-                var request = BuildJourneyRequest(arguments, capture.JourneyContext, origin, destination);
+                var askReturnTime = IsPassenger && OptionalBool(arguments, "askReturnTime") == true;
+                var request = BuildJourneyRequest(arguments, capture.JourneyContext, origin.Station.Id, destination.Station.Id);
                 var journey = await Services.PostAsync<JourneyRequest, JourneyResult>(
                     "planner",
                     "journeys",
@@ -219,6 +239,7 @@ internal abstract class AssistantToolRegistry
                     cancellationToken);
                 capture.Journey = journey;
                 capture.JourneyContext = journey.Request;
+                if (IsPassenger) capture.RecordPassengerJourney(journey, askReturnTime);
                 return Serialize(new
                 {
                     journey,
@@ -325,7 +346,7 @@ internal abstract class AssistantToolRegistry
         return new JourneyRequest(origin, destination, accessible, departureTime);
     }
 
-    protected static string ResolveStation(JsonElement arguments, AssistantCapture capture, string property = "name")
+    protected string ResolveStation(JsonElement arguments, AssistantCapture capture, string property = "name")
     {
         var text = RequiredString(arguments, property);
         var resolution = StationResolution(text);
@@ -347,7 +368,7 @@ internal abstract class AssistantToolRegistry
     private sealed record StationChoice(string Id, string Name);
     private sealed record StationLookup(bool Resolved, StationChoice? Station, IReadOnlyList<StationChoice> Choices, string? Message = null);
 
-    private static StationLookup StationResolution(string text)
+    private StationLookup StationResolution(string text)
     {
         var station = ResolveStationId(text);
         if (station is not null)
@@ -356,7 +377,8 @@ internal abstract class AssistantToolRegistry
             return new(true, new(definition.Id, definition.Name), []);
         }
 
-        var normalized = Normalize(Network.NormalizeStationName(text));
+        var name = Network.NormalizeStationName(text);
+        var normalized = Normalize(name);
         var choices = Network.Definition.Stations
             .Where(candidate =>
                 normalized.Length > 0 &&
@@ -365,9 +387,31 @@ internal abstract class AssistantToolRegistry
             .Select(candidate => new StationChoice(candidate.Id, candidate.Name))
             .Take(8)
             .ToList();
+        if (IsPassenger && choices.Count == 0 && text.Length <= 100 && name.Length is >= 4 and <= 40 &&
+            name.All(c => char.IsAsciiLetter(c) || c == ' '))
+        {
+            var close = Network.Definition.Stations
+                .Where(candidate => OneEditAway(name, candidate.Name.ToLowerInvariant()))
+                .Take(2)
+                .ToArray();
+            if (close.Length == 1) return new(true, new(close[0].Id, close[0].Name), []);
+        }
         return new(false, null, choices, choices.Count > 0
                 ? "The station name is ambiguous. Ask the passenger to choose one of these stations."
                 : "No curated Aspireland station or landmark matched that name.");
+    }
+
+    private static bool OneEditAway(ReadOnlySpan<char> left, ReadOnlySpan<char> right)
+    {
+        if (left.Length > right.Length) return OneEditAway(right, left);
+        if (right.Length - left.Length > 1) return false;
+        var prefix = 0;
+        while (prefix < left.Length && left[prefix] == right[prefix]) prefix++;
+        if (left.Length != right.Length) return left[prefix..].SequenceEqual(right[(prefix + 1)..]);
+        if (prefix == left.Length) return false;
+        return left[(prefix + 1)..].SequenceEqual(right[(prefix + 1)..]) ||
+            (prefix + 1 < left.Length && left[prefix] == right[prefix + 1] && left[prefix + 1] == right[prefix] &&
+             left[(prefix + 2)..].SequenceEqual(right[(prefix + 2)..]));
     }
 
     protected static string RequiredString(JsonElement arguments, string name)
@@ -418,6 +462,7 @@ internal abstract class AssistantToolRegistry
 internal sealed class PassengerToolRegistry(ProposalStore proposals, ServiceJsonClient? services = null) : AssistantToolRegistry(proposals, services)
 {
     public override IReadOnlyList<AssistantToolDefinition> Definitions { get; } = ToolDefinitions.Passenger;
+    protected override bool IsPassenger => true;
 
     protected override Task<string> ExecuteCoreAsync(
         string name,
@@ -516,6 +561,12 @@ internal static class ToolDefinitions
         """
         {"type":"object","properties":{"origin":{"type":"string"},"destination":{"type":"string"},"accessible":{"type":"boolean"},"departureTime":{"type":"string","description":"ISO 8601 simulated departure time"}},"additionalProperties":false}
         """);
+    private static readonly AssistantToolDefinition PlanPassengerJourney = Define(
+        "plan_journey",
+        "Plan a real journey. Origin or destination may be omitted only when available in the prior journey context.",
+        """
+        {"type":"object","properties":{"origin":{"type":"string"},"destination":{"type":"string"},"accessible":{"type":"boolean"},"departureTime":{"type":"string","description":"ISO 8601 simulated departure time"},"askReturnTime":{"type":"boolean","description":"True for the outbound leg of a round trip when the rider has not given a return time."}},"additionalProperties":false}
+        """);
     private static readonly AssistantToolDefinition CompareIntervention = Define(
         "compare_intervention",
         "Run the authoritative paired simulator comparison for a bounded service action. Use numeric amount for hold-train and set-headway; value is only for deploy-reserve and short-turn.",
@@ -530,7 +581,7 @@ internal static class ToolDefinitions
         ActionSchema(includeExplanation: false, includeReason: true));
 
     public static IReadOnlyList<AssistantToolDefinition> Passenger { get; } =
-        [ResolveStation, SystemStatus, GetArrivals, PlanJourney];
+        [ResolveStation, SystemStatus, GetArrivals, PlanPassengerJourney];
     public static IReadOnlyList<AssistantToolDefinition> Operator { get; } =
         [ResolveStation, SystemStatus, GetArrivals, DiagnoseStation, PlanJourney, CompareIntervention, ProposeAction, ExecuteAction];
 

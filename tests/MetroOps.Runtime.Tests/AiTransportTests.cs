@@ -52,6 +52,81 @@ public sealed class AiTransportTests
     }
 
     [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task SignalPlansBothRoundTripDirectionsOrAsksForReturnTime(bool returnTimeKnown)
+    {
+        const string question = "can u helpme plan round trip journey from airport to centtral exchange";
+        const string departure = "2026-11-18T16:30:00+00:00";
+        static string PlanCall(string id, object args) => JsonSerializer.Serialize(new
+        {
+            id = $"resp-{id}", @object = "response", created_at = 1, model = "gpt-5-mini", status = "completed",
+            output = new[] { new { id = $"fc-{id}", type = "function_call", status = "completed",
+                call_id = id, name = "plan_journey", arguments = JsonSerializer.Serialize(args) } }
+        });
+        var modelResponses = new Queue<string>();
+        modelResponses.Enqueue(PlanCall("outbound", new { origin = "airport", destination = "centtral exchange",
+            askReturnTime = !returnTimeKnown }));
+        if (returnTimeKnown)
+            modelResponses.Enqueue(PlanCall("return", new { origin = "centtral exchange", destination = "airport",
+                departureTime = departure }));
+        modelResponses.Enqueue(TextResponse.Replace("Done.", "Take a fictional line."));
+        using var modelHttp = new HttpClient(new Handler(async (request, _) =>
+        {
+            using var json = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
+            if (modelResponses.Peek().Contains("resp-outbound"))
+            {
+                Assert.Contains(question, json.RootElement.GetProperty("input").GetRawText());
+                var planner = Assert.Single(json.RootElement.GetProperty("tools").EnumerateArray(),
+                    tool => tool.GetProperty("name").GetString() == "plan_journey");
+                Assert.Equal("boolean", planner.GetProperty("parameters").GetProperty("properties")
+                    .GetProperty("askReturnTime").GetProperty("type").GetString());
+                Assert.Contains("Never guess a return time", json.RootElement.GetProperty("instructions").GetString());
+            }
+            return JsonResponse(modelResponses.Dequeue());
+        }));
+
+        var requests = new List<JourneyRequest>();
+        var now = new DateTimeOffset(2026, 11, 18, 12, 30, 0, TimeSpan.Zero);
+        using var serviceHttp = new HttpClient(new Handler(async (request, _) =>
+        {
+            Assert.Equal("/journeys", request.RequestUri!.AbsolutePath);
+            var trip = JsonSerializer.Deserialize<JourneyRequest>(await request.Content!.ReadAsStringAsync(), Wire.Json)!;
+            requests.Add(trip);
+            var start = trip.DepartureTime ?? now;
+            var duration = trip.Origin == "airport" ? 1200 : 1320;
+            var journey = new JourneyResult("test-scenario", 1, 1, now, trip,
+                [new() { TotalSeconds = duration, ArrivesAt = start.AddSeconds(duration),
+                    Legs = [new() { Line = "AX", From = trip.Origin, To = trip.Destination, Destination = trip.Destination }] }]);
+            return JsonResponse(JsonSerializer.Serialize(journey, Wire.Json));
+        }));
+
+        var prompt = AiEndpoints.BuildSystemPrompt("passenger", null, TimeZoneInfo.Utc);
+        var tools = new PassengerToolRegistry(new ProposalStore(), new ServiceJsonClient(serviceHttp));
+        var result = await Client(modelHttp).CompleteAsync(
+            new AssistantRequest(question, History: returnTimeKnown ? [new("user", $"I'd like to return at {departure}.")] : null),
+            prompt, tools, CancellationToken.None);
+
+        Assert.NotEmpty(requests);
+        Assert.Equal(new JourneyRequest("airport", "central-exchange"), requests[0]);
+        Assert.StartsWith("The route from Airport to Central Exchange takes about 20 minutes", result.Text);
+        Assert.DoesNotContain("fictional", result.Text);
+        if (returnTimeKnown)
+        {
+            Assert.Equal(new JourneyRequest("central-exchange", "airport", DepartureTime: DateTimeOffset.Parse(departure)), requests[1]);
+            Assert.Equal(2, requests.Count);
+            Assert.Contains("The route from Central Exchange to Airport takes about 22 minutes", result.Text);
+            Assert.DoesNotContain("What time", result.Text);
+        }
+        else
+        {
+            Assert.Single(requests);
+            Assert.Contains("What time would you like to head back?", result.Text);
+            Assert.DoesNotContain("The route from Central Exchange to Airport", result.Text);
+        }
+    }
+
+    [Theory]
     [InlineData("fresh")]
     [InlineData("insufficient")]
     [InlineData("stale")]

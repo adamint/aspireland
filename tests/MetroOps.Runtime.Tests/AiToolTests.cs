@@ -6,6 +6,36 @@ namespace MetroOps.Runtime.Tests;
 
 public sealed class AiToolTests
 {
+    [Theory]
+    [InlineData("centtral exchange", "central-exchange")]
+    [InlineData("airprot", "airport")]
+    [InlineData("city hall", "civic-square")]
+    public async Task PassengerResolvesUniqueStationTyposAndExistingAliases(string name, string expected)
+    {
+        var passenger = new PassengerToolRegistry(new ProposalStore());
+        var capture = new AssistantCapture(null);
+        var arguments = JsonSerializer.Serialize(new { name });
+        var result = await passenger.ExecuteAsync("resolve_station", arguments, capture, CancellationToken.None);
+        using var json = JsonDocument.Parse(result);
+
+        Assert.True(json.RootElement.GetProperty("resolved").GetBoolean());
+        Assert.Equal(expected, json.RootElement.GetProperty("station").GetProperty("id").GetString());
+        Assert.Null(capture.Clarification);
+    }
+
+    [Fact]
+    public async Task OperatorDoesNotResolveApproximateStationNames()
+    {
+        var capture = new AssistantCapture(null);
+        var result = await new OperatorToolRegistry(new ProposalStore()).ExecuteAsync(
+            "resolve_station", """{"name":"centtral exchange"}""", capture, CancellationToken.None);
+        using var json = JsonDocument.Parse(result);
+
+        Assert.False(json.RootElement.GetProperty("resolved").GetBoolean());
+        Assert.NotNull(capture.Clarification);
+        Assert.Null(Network.Resolve("centtral exchange"));
+    }
+
     [Fact]
     public async Task UnknownStationReturnsOnlyRealClarificationChoices()
     {
@@ -62,7 +92,7 @@ public sealed class AiToolTests
     public void AssistantContextUsesValidatedViewerLocalSimulationTime()
     {
         var zone = AiEndpoints.ResolveViewerTimeZone("America/New_York");
-        var world = new ScenarioContext("scenario", 1, 2,
+        var world = new ScenarioContext("private-scenario-marker", 1, 2,
             new DateTimeOffset(2026, 11, 17, 11, 34, 24, TimeSpan.Zero), DateTimeOffset.UtcNow, "advise");
 
         var prompt = AiEndpoints.BuildSystemPrompt("passenger", world, zone);
@@ -70,6 +100,12 @@ public sealed class AiToolTests
         Assert.Contains("06:34:24 -05:00", prompt);
         Assert.Contains("America/New_York", prompt);
         Assert.Contains("never invent station", prompt);
+        Assert.DoesNotContain("private-scenario-marker", prompt);
+        Assert.DoesNotContain("generation 1", prompt);
+        Assert.DoesNotContain("version 2", prompt);
+        Assert.Contains("policy notes or checklists", prompt);
+        var dispatch = AiEndpoints.BuildSystemPrompt("operator", world, zone);
+        Assert.Contains("private-scenario-marker, generation 1, version 2", dispatch);
     }
 
     [Fact]
