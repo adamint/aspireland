@@ -83,6 +83,32 @@ beforeEach(() => {
   refresh.mockResolvedValue(undefined);
 });
 
+it.each(["loading", "retry"])("keeps the Dispatch shell and disables controls while %s without a snapshot", async (state) => {
+  useWorld.mockReturnValue({ data: null, error: state === "retry" ? "Network unavailable" : null, loading: state === "loading", refresh });
+  const view = render(<OperationsApp />);
+  expect(screen.getByRole("banner")).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "Dispatch desk" })).toBeTruthy();
+  const metrics = screen.getByRole("region", { name: "Network metrics" });
+  expect(within(metrics).getAllByText("—")).toHaveLength(5);
+  expect(screen.getByRole("button", { name: "Pause" })).toHaveProperty("disabled", true);
+  expect(screen.getByLabelText("Speed")).toHaveProperty("disabled", true);
+  expect(screen.getByLabelText("Authority")).toHaveProperty("disabled", true);
+  expect(view.container.querySelector(".scenario-menu")?.hasAttribute("inert")).toBe(true);
+  if (state === "retry") {
+    expect(screen.getByRole("alert").textContent).toBe("Network unavailable");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+  } else {
+    expect(screen.getByRole("status").textContent).toBe("Loading the dispatch desk…");
+  }
+
+  useWorld.mockReturnValue({ data: { world, network, stale: false }, error: null, loading: false, refresh });
+  view.rerender(<OperationsApp />);
+  expect(screen.getByRole("heading", { name: "Dispatch desk" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Resume" })).toHaveProperty("disabled", false);
+  expect(screen.getByLabelText("Seed")).toHaveProperty("value", "1");
+});
+
 it("exposes active incident context and clears the selected incident from the dispatch desk", async () => {
   const active = { ...world.incidents[0], id: "broken-lift", state: "active", description: "Elevator unavailable" };
   useWorld.mockReturnValue({ data: { world: { ...world, incidents: [active] }, network, stale: false }, refresh, error: null, loading: false });

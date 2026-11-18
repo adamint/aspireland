@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { api } from "../api";
 import { isWaitingCohort, summarizeCohorts } from "../cohorts";
 import { AssistantPanel } from "../components/AssistantPanel";
@@ -20,9 +20,9 @@ import type {
 
 type DetailTab = "arrivals" | "station" | "operations";
 
-function Metric({ label, value, detail, tone }: { label: string; value: string; detail?: string; tone?: string }) {
+function Metric({ label, value, detail, tone, className = "" }: { label: string; value: string; detail?: string; tone?: string; className?: string }) {
   return (
-    <div className={`ops-metric ${tone ? `ops-metric--${tone}` : ""}`}>
+    <div className={`ops-metric ${tone ? `ops-metric--${tone}` : ""} ${className}`}>
       <span>{label}</span>
       <strong>{value}</strong>
       {detail && <small>{detail}</small>}
@@ -30,10 +30,10 @@ function Metric({ label, value, detail, tone }: { label: string; value: string; 
   );
 }
 
-function Controls({ world, refresh }: { world: WorldState; refresh: () => Promise<void> }) {
+function Controls({ world, refresh }: { world?: WorldState; refresh: () => Promise<void> }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [seed, setSeed] = useState(String(world.seed));
+  const [seed, setSeed] = useState(world ? String(world.seed) : "");
 
   const run = async (label: string, operation: () => Promise<unknown>) => {
     setBusy(label);
@@ -51,48 +51,90 @@ function Controls({ world, refresh }: { world: WorldState; refresh: () => Promis
   return (
     <div className="ops-control-cluster">
       <button
-        className={`pause-button ${world.paused ? "paused" : ""}`}
-        onClick={() => void run("clock", () => api.clock({ paused: !world.paused }))}
-        disabled={busy !== null}
+        className={`pause-button ${world?.paused ? "paused" : ""}`}
+        onClick={world ? () => void run("clock", () => api.clock({ paused: !world.paused })) : undefined}
+        disabled={!world || busy !== null}
       >
-        {world.paused ? "Resume" : "Pause"}
+        {world?.paused ? "Resume" : "Pause"}
       </button>
       <label className="compact-field">
         <span>Speed</span>
         <select
-          value={world.speed}
-          onChange={(event) => void run("speed", () => api.clock({ speed: Number(event.target.value) }))}
-          disabled={busy !== null}
+          value={world?.speed ?? ""}
+          onChange={world ? (event) => void run("speed", () => api.clock({ speed: Number(event.target.value) })) : undefined}
+          disabled={!world || busy !== null}
         >
+          {!world && <option value="">—</option>}
           {[1, 5, 10, 30, 60].map((speed) => <option key={speed} value={speed}>{speed}×</option>)}
         </select>
       </label>
       <label className="compact-field">
         <span>Authority</span>
         <select
-          value={world.authorityMode}
-          onChange={(event) => void run("authority", () => api.authority(event.target.value))}
-          disabled={busy !== null}
+          value={world?.authorityMode ?? ""}
+          onChange={world ? (event) => void run("authority", () => api.authority(event.target.value)) : undefined}
+          disabled={!world || busy !== null}
         >
+          {!world && <option value="">—</option>}
           <option value="advise">Advise</option>
           <option value="approval">Approval</option>
           <option value="bounded">Bounded</option>
         </select>
       </label>
-      <details className="scenario-menu">
+      <details className="scenario-menu" inert={!world} aria-disabled={!world || undefined}>
         <summary>New scenario</summary>
         <div>
           <label>
             <span>Seed</span>
             <input value={seed} inputMode="numeric" onChange={(event) => setSeed(event.target.value)} />
           </label>
-          <button onClick={() => void run("normal", () => api.scenario({ seed: Number(seed), preset: "normal" }))}>Normal day</button>
-          <button onClick={() => void run("rough", () => api.scenario({ seed: Number(seed), preset: "rough" }))}>Rough day</button>
+          <button disabled={!world} onClick={world ? () => void run("normal", () => api.scenario({ seed: Number(seed), preset: "normal" })) : undefined}>Normal day</button>
+          <button disabled={!world} onClick={world ? () => void run("rough", () => api.scenario({ seed: Number(seed), preset: "rough" })) : undefined}>Rough day</button>
         </div>
       </details>
       {error && <span className="control-error">{error}</span>}
     </div>
   );
+}
+
+function OperationsFrame({ world, waiting = 0, refresh, warning, children }: {
+  world?: WorldState;
+  waiting?: number;
+  refresh: () => Promise<void>;
+  warning?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <div className="ops-app">
+      <header className="ops-topbar">
+        <div className="ops-brand"><TransitBrand /></div>
+        <div className="sim-clock">
+          <span className={!world ? "status-dot status-dot--unknown" : world.paused ? "status-dot status-dot--paused" : "status-dot"} />
+          <div><small>SIMULATED TIME</small><strong>{world ? formatClock(world.simTime) : "Awaiting data"}</strong></div>
+          <span>{world ? world.paused ? "PAUSED" : `${world.speed}× LIVE` : "—"}</span>
+        </div>
+        <div className="scenario-identity">
+          <small>SCENARIO</small>
+          <strong>{world ? `${titleCase(world.preset)} · G${world.generation}` : "Awaiting data"}</strong>
+          <span>{world?.scenarioId.slice(0, 8) ?? "—"}</span>
+        </div>
+        <Controls key={world ? "loaded" : "pending"} world={world} refresh={refresh} />
+      </header>
+      {warning}
+      <section className="ops-metrics-strip" aria-label="Network metrics" aria-busy={!world || undefined}>
+        <Metric label="Trains active" value={world ? world.trains.filter((train) => train.state !== "reserve" && train.state !== "withdrawn").length.toString() : "—"} detail={world ? `${world.trains.length} registered` : "\u00a0"} />
+        <Metric className="ops-metric--waiting-time" label="Waiting" value={world ? waiting.toLocaleString() : "—"} detail={world ? `${formatDuration(world.metrics.waitingPassengerSeconds)} accumulated` : "\u00a0"} tone={world && waiting > 600 ? "warning" : ""} />
+        <Metric label="Completed" value={world?.metrics.completed.toLocaleString() ?? "—"} detail={world ? `${world.metrics.deniedBoardings} denied boardings` : "\u00a0"} />
+        <Metric label="Incidents" value={world ? world.incidents.filter((incident) => incident.state === "active").length.toString() : "—"} detail={world ? `${world.metrics.accessibilityFailures} access failures` : "\u00a0"} tone={world?.incidents.some((incident) => incident.state === "active") ? "critical" : ""} />
+        <Metric label="Shared trunk" value={world ? `${Object.keys(world.blockOccupancy).filter((key) => key.startsWith("BA:")).length} blocks` : "—"} detail={world ? `${Object.keys(world.junctionReservations).length} junction routes` : "\u00a0"} />
+      </section>
+      {children}
+    </div>
+  );
+}
+
+function DispatchHeading() {
+  return <div className="dispatch-heading"><div><h1>Dispatch desk</h1><p>Exceptions, recovery and service controls</p></div><nav aria-label="Dispatch sections"><a href="#dispatch-assistant">Dispatch assistant</a><a href="#network">Network and station inspection ↓</a></nav></div>;
 }
 
 function TrainCard({
@@ -309,66 +351,35 @@ export function OperationsApp() {
     [snapshot],
   );
 
-  if (worldState.loading && !snapshot) {
-    return (
-      <div className="ops-app">
-        <header className="ops-topbar">
-          <div className="ops-brand"><TransitBrand /></div>
-        </header>
-        <main>
-          <section className="dispatch-section page-loading">
-            <p role="status">Loading the dispatch desk…</p>
-          </section>
-        </main>
-      </div>
-    );
-  }
-
   if (!snapshot) {
     return (
-      <main className="app-loading ops-theme">
-        <div className="notice notice--error">{worldState.error ?? "The operations API did not return a world snapshot."}</div>
-        <button className="primary-button" onClick={() => void worldState.refresh()}>Retry</button>
-      </main>
+      <OperationsFrame refresh={worldState.refresh}>
+        <main>
+          <section className="dispatch-section page-loading">
+            <DispatchHeading />
+            {worldState.loading ? <p role="status">Loading the dispatch desk…</p> : (
+              <>
+                <div className="notice notice--error" role="alert">{worldState.error ?? "The operations API did not return a world snapshot."}</div>
+                <button className="primary-button" onClick={() => void worldState.refresh()}>Retry</button>
+              </>
+            )}
+          </section>
+        </main>
+      </OperationsFrame>
     );
   }
 
   const { world, network } = snapshot;
   return (
-    <div className="ops-app">
-      <header className="ops-topbar">
-        <div className="ops-brand"><TransitBrand /></div>
-        <div className="sim-clock">
-          <span className={world.paused ? "status-dot status-dot--paused" : "status-dot"} />
-          <div><small>SIMULATED TIME</small><strong>{formatClock(world.simTime)}</strong></div>
-          <span>{world.paused ? "PAUSED" : `${world.speed}× LIVE`}</span>
-        </div>
-        <div className="scenario-identity">
-          <small>SCENARIO</small>
-          <strong>{titleCase(world.preset)} · G{world.generation}</strong>
-          <span>{world.scenarioId.slice(0, 8)}</span>
-        </div>
-        <Controls world={world} refresh={worldState.refresh} />
-      </header>
-
-      {(snapshot.stale || worldState.error) && (
+    <OperationsFrame world={world} waiting={waiting} refresh={worldState.refresh} warning={(snapshot.stale || worldState.error) && (
         <div className="global-warning">
           <strong>{snapshot.stale ? "Projection data is stale." : "Live refresh failed."}</strong>
           <span>{snapshot.warning ?? worldState.error} Last good wall-clock update {formatWallTimestamp(world.updatedAt)} local.</span>
         </div>
-      )}
-
-      <section className="ops-metrics-strip" aria-label="Network metrics">
-        <Metric label="Trains active" value={world.trains.filter((train) => train.state !== "reserve" && train.state !== "withdrawn").length.toString()} detail={`${world.trains.length} registered`} />
-        <Metric label="Waiting" value={waiting.toLocaleString()} detail={`${formatDuration(world.metrics.waitingPassengerSeconds)} accumulated`} tone={waiting > 600 ? "warning" : ""} />
-        <Metric label="Completed" value={world.metrics.completed.toLocaleString()} detail={`${world.metrics.deniedBoardings} denied boardings`} />
-        <Metric label="Incidents" value={world.incidents.filter((incident) => incident.state === "active").length.toString()} detail={`${world.metrics.accessibilityFailures} access failures`} tone={world.incidents.some((incident) => incident.state === "active") ? "critical" : ""} />
-        <Metric label="Shared trunk" value={`${Object.keys(world.blockOccupancy).filter((key) => key.startsWith("BA:")).length} blocks`} detail={`${Object.keys(world.junctionReservations).length} junction routes`} />
-      </section>
-
+      )}>
       <main>
       <section className="dispatch-section" aria-label="Dispatch desk">
-        <div className="dispatch-heading"><div><h1>Dispatch desk</h1><p>Exceptions, recovery and service controls</p></div><nav aria-label="Dispatch sections"><a href="#dispatch-assistant">Dispatch assistant</a><a href="#network">Network and station inspection ↓</a></nav></div>
+        <DispatchHeading />
         <div className="dispatch-layout">
           <DispatchDesk
             key={`${world.scenarioId}:${world.generation}`}
@@ -431,6 +442,6 @@ export function OperationsApp() {
         </div>
       </section>
       </main>
-    </div>
+    </OperationsFrame>
   );
 }

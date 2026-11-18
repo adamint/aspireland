@@ -61,6 +61,9 @@ button:active:not(:disabled) { transform: translateY(1px); }
 html[data-site], .passenger-app { background: var(--cream); color: var(--ink); }
 .app-loading, .app-loading.passenger-theme { background: var(--cream); color: var(--ink); }
 .page-loading > p { margin: 0; color: var(--muted); line-height: 1.5; }
+.status-dot--unknown { background: var(--muted); box-shadow: none; }
+.scenario-menu[aria-disabled="true"] summary { opacity: .55; cursor: default; }
+.ops-metric--waiting-time small { min-block-size: 2lh; }
 .public-sim-banner {
   min-height: 34px;
   background: var(--ink);
