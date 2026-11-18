@@ -154,7 +154,9 @@ public sealed record ServiceAction(string Kind, string? Target = null, string? V
 public sealed record CommandEnvelope(string CommandId, string ScenarioId, int Generation, long? ExpectedVersion,
     string Actor, string Reason, ServiceAction Action);
 public sealed record CommandResult(bool Accepted, string Status, string Message, long Version, string? EntityId = null);
-public sealed record ScenarioRequest(long? Seed, string Preset = "normal", DateTimeOffset? StartTime = null);
+public sealed record ScenarioRequest(long? Seed, string Preset = "normal", DateTimeOffset? StartTime = null,
+    string? ScenarioId = null, int? Generation = null);
+public sealed record ScenarioResetResult(string ScenarioId, int Generation, long Seed, DateTimeOffset SimTime);
 public sealed record ScenarioContext(string ScenarioId, int Generation, long Version, DateTimeOffset SimTime,
     DateTimeOffset UpdatedAt, string AuthorityMode);
 public sealed record StationQueueSummary(string Id, string Name, int Waiting, int PlatformWaiting, int AccessQueue,

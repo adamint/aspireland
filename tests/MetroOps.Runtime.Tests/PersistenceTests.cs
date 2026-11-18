@@ -28,10 +28,9 @@ public sealed class PersistenceTests(ITestOutputHelper output)
     [PersistenceFact]
     public async Task Scenario_exports_database_errors_and_request_children_but_not_successful_database_roots()
     {
-        await using var fixture = TestDataSource();
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
-        builder.Configuration["ConnectionStrings:metro"] = fixture.ConnectionString;
+        builder.Configuration["ConnectionStrings:metro"] = TestConnectionString();
         builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"] = null;
         builder.AddScenarioDefaults();
         builder.AddSimulationPersistence();
@@ -78,6 +77,53 @@ public sealed class PersistenceTests(ITestOutputHelper output)
         Assert.Equal(request.SpanId, child.ParentSpanId);
         Assert.Equal(request.TraceId, child.TraceId);
         Assert.Equal(0, successfulRoots);
+    }
+
+    [PersistenceFact]
+    public async Task Fenced_scenario_reset_rejects_replay_without_changing_the_checkpoint()
+    {
+        await using var dataSource = TestDataSource();
+        var store = new WorldStore(dataSource);
+        await store.Initialize(default);
+        var before = await store.Read(default);
+
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton(store);
+        builder.Services.AddHttpClient();
+        builder.Services.AddSingleton<ServiceClients>();
+        var key = Guid.NewGuid().ToString("N");
+        builder.Configuration["SERVICE_KEY"] = key;
+        await using var app = builder.Build();
+        ScenarioRoutes.Map(app);
+        await app.StartAsync();
+        using var client = app.GetTestClient();
+        client.DefaultRequestHeaders.Add("X-Service-Key", key);
+
+        var startTime = new DateTimeOffset(2026, 11, 21, 17, 30, 0, TimeSpan.Zero);
+        var request = new { before.ScenarioId, before.Generation, Seed = 20261117, StartTime = startTime };
+        using var reset = await client.PostAsJsonAsync("/scenarios", request);
+        Assert.Equal(HttpStatusCode.OK, reset.StatusCode);
+        var after = await store.Read(default);
+        Assert.NotEqual(before.ScenarioId, after.ScenarioId);
+        Assert.Equal(before.Generation + 1, after.Generation);
+        Assert.Equal(startTime, after.SimTime);
+        var audit = Assert.Single(await store.Events(0, default), e => e.Kind == "ScenarioReset");
+        Assert.Equal((after.ScenarioId, after.Generation, startTime), (audit.ScenarioId, audit.Generation, audit.SimTime));
+
+        using var replay = await client.PostAsJsonAsync("/scenarios", request);
+        Assert.Equal(HttpStatusCode.Conflict, replay.StatusCode);
+
+        using var staleGeneration = await client.PostAsJsonAsync("/scenarios",
+            new { after.ScenarioId, before.Generation, StartTime = startTime });
+        Assert.Equal(HttpStatusCode.Conflict, staleGeneration.StatusCode);
+        using var staleIdentity = await client.PostAsJsonAsync("/scenarios",
+            new { before.ScenarioId, after.Generation, StartTime = startTime });
+        Assert.Equal(HttpStatusCode.Conflict, staleIdentity.StatusCode);
+        using var incomplete = await client.PostAsJsonAsync("/scenarios", new { after.ScenarioId, StartTime = startTime });
+        Assert.Equal(HttpStatusCode.BadRequest, incomplete.StatusCode);
+
+        Assert.Equal(after.Version, (await store.Read(default)).Version);
     }
 
     [PersistenceFact]
@@ -433,7 +479,9 @@ public sealed class PersistenceTests(ITestOutputHelper output)
         Assert.Null(await store.ReadTrain("not-a-train", default));
     }
 
-    private static NpgsqlDataSource TestDataSource()
+    private static NpgsqlDataSource TestDataSource() => NpgsqlDataSource.Create(TestConnectionString());
+
+    private static string TestConnectionString()
     {
         var connection = new NpgsqlConnectionStringBuilder(Environment.GetEnvironmentVariable("METROOPS_TEST_POSTGRES"));
         if (connection.Database?.StartsWith("metroops_test_", StringComparison.Ordinal) != true)
@@ -443,7 +491,7 @@ public sealed class PersistenceTests(ITestOutputHelper output)
         using (var create = bootstrap.CreateCommand($"CREATE SCHEMA {schema}"))
             create.ExecuteNonQuery();
         connection.SearchPath = schema;
-        return NpgsqlDataSource.Create(connection.ConnectionString);
+        return connection.ConnectionString;
     }
 
     private sealed class TraceCapture : BaseExporter<Activity>

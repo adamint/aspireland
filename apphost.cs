@@ -11,7 +11,10 @@
 #:property TreatProjectReferencesAsResources=false
 #:project src/MetroOps.Contracts/MetroOps.Contracts.csproj
 
+using System.Net;
+using System.Net.Http.Json;
 using System.Security.Cryptography;
+using System.Text.Json;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Dotnet;
 using Aspire.Hosting.Foundry;
@@ -106,6 +109,85 @@ var operations = builder.AddDotnetProject("operations-api", "src/MetroOps.Operat
     .WithReference(ai).WithReference(dispatch).WithReference(incidents)
     .WithEnvironment("SERVICE_KEY", serviceKey).WithEnvironment("OPERATOR_KEY", operatorKey)
     .WaitFor(ai).WaitFor(incidents).WaitFor(analytics);
+
+var timePresets = new Dictionary<string, (string Label, DateTimeOffset StartTime)>
+{
+    ["morning-rush"] = ("Tuesday 7:30 AM (morning rush)", new(2026, 11, 17, 12, 30, 0, TimeSpan.Zero)),
+    ["weekday-midday"] = ("Tuesday 12:30 PM (between rush hours)", new(2026, 11, 17, 17, 30, 0, TimeSpan.Zero)),
+    ["evening-rush"] = ("Tuesday 5:15 PM (evening rush)", new(2026, 11, 17, 22, 15, 0, TimeSpan.Zero)),
+    ["weekend"] = ("Saturday 12:30 PM (weekend leisure)", new(2026, 11, 21, 17, 30, 0, TimeSpan.Zero)),
+    ["overnight"] = ("Sunday 2:30 AM (quiet overnight)", new(2026, 11, 22, 7, 30, 0, TimeSpan.Zero))
+};
+const string timeCommandClient = "simulation-time-command";
+builder.Services.AddHttpClient(timeCommandClient, client => client.Timeout = TimeSpan.FromSeconds(10))
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+var scenarioEndpoint = scenario.GetEndpoint("http");
+var operationsEndpoint = operations.GetEndpoint("http");
+operations.WithCommand("set-simulation-time", "Set simulation time", async context =>
+{
+    if (context.Arguments.GetString("time-preset") is not { } choice || !timePresets.TryGetValue(choice, out var preset))
+        return CommandResults.Failure("Choose one of the simulation time presets.");
+
+    var ct = context.CancellationToken;
+    var scenarioUrl = await scenarioEndpoint.GetValueAsync(ct);
+    var operationsUrl = await operationsEndpoint.GetValueAsync(ct);
+    if (scenarioUrl is null || operationsUrl is null)
+        return CommandResults.Failure("Wait for Scenario and Operations API to start.");
+
+    var key = await operatorKey.Resource.GetValueAsync(ct);
+    if (string.IsNullOrEmpty(key))
+        return CommandResults.Failure("The operator key is unavailable.");
+
+    using var client = context.Services.GetRequiredService<IHttpClientFactory>().CreateClient(timeCommandClient);
+    try
+    {
+        var current = await client.GetFromJsonAsync<ScenarioContext>($"{scenarioUrl}/context", Wire.Json, ct);
+        if (current is null || string.IsNullOrEmpty(current.ScenarioId))
+            return CommandResults.Failure("Scenario did not report its current identity. No reset was sent.");
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{operationsUrl}/api/scenarios")
+        {
+            Content = JsonContent.Create(new ScenarioRequest(20261117, StartTime: preset.StartTime,
+                ScenarioId: current.ScenarioId, Generation: current.Generation), options: Wire.Json)
+        };
+        request.Headers.Add("X-Operator-Key", key);
+        using var response = await client.SendAsync(request, ct);
+        if (response.StatusCode == HttpStatusCode.Conflict)
+            return CommandResults.Failure("The scenario changed before the reset. Check Dispatch before trying again.");
+        if (!response.IsSuccessStatusCode)
+            return CommandResults.Failure($"Operations API returned HTTP {(int)response.StatusCode}. Check Dispatch for the current scenario.");
+
+        var result = await response.Content.ReadFromJsonAsync<ScenarioResetResult>(Wire.Json, ct);
+        if (result is null)
+            return CommandResults.Failure("Operations API did not confirm the reset. Check Dispatch for the current scenario.");
+
+        var summary = $"Started a fresh scenario at {preset.Label}, New York time (generation {result.Generation}).";
+        return CommandResults.Success(summary, summary + "\n\nOpen Dispatch to see the new clock and rider demand.",
+            CommandResultFormat.Text, displayImmediately: true);
+    }
+    catch (Exception ex) when (ex is HttpRequestException or JsonException ||
+        ex is OperationCanceledException && !ct.IsCancellationRequested)
+    {
+        return CommandResults.Failure("Could not confirm the scenario reset. Check Dispatch for the current scenario before retrying.");
+    }
+}, new CommandOptions
+{
+    Description = "Start a fresh scenario at a different point in the week.",
+    ConfirmationMessage = "Start a fresh scenario? This resets trains, riders, incidents, and dispatch settings.",
+    Arguments =
+    [
+        new InteractionInput
+        {
+            Name = "time-preset",
+            Label = "Start time (New York time)",
+            Description = "Starts a fresh scenario and resets trains, riders, incidents, and dispatch settings.",
+            InputType = InputType.Choice,
+            Required = true,
+            Options = timePresets.Select(p => KeyValuePair.Create(p.Key, p.Value.Label)).ToArray()
+        }
+    ]
+});
+
 var passenger = builder.AddDotnetProject("passenger-api", "src/MetroOps.PassengerApi/MetroOps.PassengerApi.csproj")
     .WithHttpEndpoint().WithHttpHealthCheck("/health")
     .WithReference(planner).WithReference(information).WithReference(analytics)

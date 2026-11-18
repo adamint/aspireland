@@ -67,18 +67,26 @@ public static class ScenarioRoutes
         app.MapPost("/scenarios", async (ScenarioRequest request, HttpContext context, WorldStore store, IConfiguration config, CancellationToken ct) =>
         {
             if (!ServiceKey.Matches(context, config, "SERVICE_KEY")) return Results.Unauthorized();
+            var fenced = request.ScenarioId is not null || request.Generation is not null;
+            if (fenced && (string.IsNullOrWhiteSpace(request.ScenarioId) || request.Generation is null))
+                return Results.BadRequest(new { error = "Provide both the scenario ID and generation." });
             var seed = request.Seed ?? System.Security.Cryptography.RandomNumberGenerator.GetInt32(1, int.MaxValue);
-            return Results.Ok(await store.Mutate(world =>
+            var result = await store.Mutate<ScenarioResetResult?>(world =>
             {
+                if (fenced && (request.ScenarioId != world.ScenarioId || request.Generation != world.Generation))
+                    return null;
                 var fresh = Kernel.Create(seed, request.Preset, request.StartTime);
                 var nextGeneration = world.Generation + 1;
                 var version = world.Version;
                 Reset(world, fresh);
                 world.Generation = nextGeneration;
                 world.Version = version;
-                Record(world, "ScenarioReset", $"New {request.Preset} scenario with seed {seed}.");
-                return new { world.ScenarioId, world.Generation, world.Seed, world.SimTime };
-            }, ct));
+                Record(world, "ScenarioReset", $"New {request.Preset} scenario with seed {seed} starting at {world.SimTime:O}.");
+                return new ScenarioResetResult(world.ScenarioId, world.Generation, world.Seed, world.SimTime);
+            }, ct);
+            return result is null
+                ? Results.Conflict(new { error = "The scenario changed. Check its current state before resetting." })
+                : Results.Ok(result);
         });
         app.MapPost("/compare", async (CompareRequest request, WorldStore store, ServiceClients clients, CancellationToken ct) =>
         {
