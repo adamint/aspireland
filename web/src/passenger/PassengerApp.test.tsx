@@ -136,6 +136,18 @@ it.each([false, true])("keeps trip help independent of transcription availabilit
   expect(screen.queryByText(/Push to talk/i)).toBeNull();
 });
 
+it("tucks the NDC Porto greeting into a footer postcard", () => {
+  render(<PassengerApp />);
+
+  const footer = screen.getByRole("contentinfo");
+  const summary = within(footer).getByText("Postcard from Porto");
+  const postcard = summary.closest("details")!;
+  expect(postcard.hasAttribute("open")).toBe(false);
+  fireEvent.click(summary);
+  expect(postcard.hasAttribute("open")).toBe(true);
+  expect(within(postcard).getByText("Olá, NDC Porto!").getAttribute("lang")).toBe("pt-PT");
+});
+
 const serviceIncident = {
   id: "trunk-closure",
   kind: "segment-closure",

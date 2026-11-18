@@ -561,7 +561,13 @@ export function PassengerApp() {
       )}
       <footer className="passenger-footer">
         <TransitBrand />
-        <p>Routes, station access and arrival times for Aspireland. <a className="font-license-link" href={interLicense} rel="license">Inter font license</a></p>
+        <div>
+          <p>Routes, station access and arrival times for Aspireland. <a className="font-license-link" href={interLicense} rel="license">Inter font license</a></p>
+          <details className="porto-postcard">
+            <summary>Postcard from Porto</summary>
+            <p lang="pt-PT">Olá, NDC Porto!</p>
+          </details>
+        </div>
       </footer>
     </div>
   );

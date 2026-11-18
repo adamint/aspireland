@@ -803,6 +803,8 @@ export function NetworkMap({
         </div>
       </div>
 
+      {calm && <div className="porto-map-trim" aria-hidden="true" />}
+
       <details className="station-directory">
         <summary>{calm ? "Find a station" : "Station directory and keyboard-accessible map alternative"}</summary>
         <div className="station-directory-grid">

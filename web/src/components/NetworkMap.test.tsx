@@ -130,6 +130,20 @@ it("uses plain colored passenger markers and hides out-of-service stock without 
   expect(view.container.querySelector(".map-train text")?.textContent).toBe("blue-1");
 });
 
+it("keeps the Porto trim decorative and outside the interactive rider map", () => {
+  const props = { network, world, onSelectStation: vi.fn() };
+  const view = render(<NetworkMap {...props} calm />);
+  const trim = view.container.querySelector(".porto-map-trim");
+  expect(trim).not.toBeNull();
+  expect(trim?.getAttribute("aria-hidden")).toBe("true");
+  const map = view.getByRole("group", { name: /Interactive Aspireland metro map/ });
+  expect(map.contains(trim)).toBe(false);
+  expect(trim?.querySelector("button, a, [tabindex]")).toBeNull();
+
+  view.rerender(<NetworkMap {...props} />);
+  expect(view.container.querySelector(".porto-map-trim")).toBeNull();
+});
+
 it("does not trap ordinary wheel scrolling and zooms through explicit controls", () => {
   const view = render(
     <NetworkMap
