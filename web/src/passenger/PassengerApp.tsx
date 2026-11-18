@@ -9,7 +9,7 @@ import { formatPassengerDateTime, formatDateTimeLocal, formatDuration, lineFor, 
 import { useCapabilities, useStationBoard, useWorld } from "../hooks";
 import { activeStationIncidents, lineIncidents, publicAlert, publicOnboardCrowding, publicTrainStatus } from "../passengerData";
 import interLicense from "../inter-OFL.txt?url";
-import type { JourneyResult, NetworkDefinition, TrainState, WorldState } from "../types";
+import type { JourneyResult, NetworkDefinition, TrainState, WorldSnapshot, WorldState } from "../types";
 
 function usePath() {
   const [path, setPath] = useState(window.location.pathname);
@@ -34,17 +34,19 @@ function PassengerHeader({
   onNavigate,
   simulatedTime,
   stale,
+  showClock = true,
 }: {
   onNavigate: (path: string) => void;
   simulatedTime?: string;
   stale?: boolean;
+  showClock?: boolean;
 }) {
   return (
     <>
-      <div className="public-sim-banner">
+      {showClock && <div className="public-sim-banner">
         <span>{stale ? "Updates delayed" : "Travel date and time"}</span>
         <strong>{simulatedTime ? formatPassengerDateTime(simulatedTime) : "Updating…"}</strong>
-      </div>
+      </div>}
       <header className="passenger-header">
         <button className="passenger-brand" onClick={() => onNavigate("/")} aria-label="Aspireland Transit home">
           <TransitBrand />
@@ -58,6 +60,48 @@ function PassengerHeader({
         <a className="header-access-link" href="#accessibility">Accessibility</a>
       </header>
     </>
+  );
+}
+
+function ServiceAlerts({ snapshot, stale = false }: { snapshot?: WorldSnapshot; stale?: boolean }) {
+  const incidents = snapshot?.world.incidents.filter((incident) => incident.state === "active") ?? [];
+  const currentAlerts = Boolean(snapshot) && !stale && incidents.length > 0;
+  const warning = stale || currentAlerts;
+  return (
+    <section className={`public-service-alerts${warning ? " public-service-alerts--warning" : ""}`}
+      id="service-alerts" aria-label="Service alerts" tabIndex={-1}>
+      <div className="public-service-alerts-inner">
+        <div className="public-service-alerts-label">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true" focusable="false">
+            {warning ? <path d="m12 3 10 18H2L12 3Zm0 6v5m0 3v1" />
+              : <><circle cx="12" cy="12" r="9" /><path d="M12 11v6m0-10v1" /></>}
+          </svg>
+          <h2>Service alerts</h2>
+        </div>
+        {currentAlerts && snapshot ? (
+          <details>
+            <summary>
+              <strong>{incidents.length} service {incidents.length === 1 ? "alert" : "alerts"}</strong>
+              <span className="public-alerts-action">View details</span>
+              <svg className="public-alerts-toggle" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true" focusable="false"><path d="m4 6 4 4 4-4" /></svg>
+            </summary>
+            <ul>
+              {incidents.map((incident) => {
+                const alert = publicAlert(incident, snapshot.network, snapshot.world.trains);
+                return <li key={incident.id}><strong>{alert.location} — {alert.title}</strong><span>{alert.description}</span></li>;
+              })}
+            </ul>
+          </details>
+        ) : (
+          <p>
+            {!snapshot ? "Checking service alerts…" : stale ? <>
+              <strong>Live service alerts unavailable</strong>
+              <span>Service updates are delayed. Last updated {formatPassengerDateTime(snapshot.world.updatedAt)}. Check again before travelling.</span>
+            </> : "No service alerts reported"}
+          </p>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -89,11 +133,10 @@ function ServiceStatus({ world, network, stale }: { world: WorldState; network: 
               </header>
               {incidents.length ? (
                 <div className="line-alerts">
-                  {stale && <p>These are the last reported alerts.</p>}
-                  {incidents.slice(0, 3).map((incident) => {
+                  {stale ? <><p>These are the last reported alerts.</p>{incidents.slice(0, 3).map((incident) => {
                     const alert = publicAlert(incident, network, world.trains);
                     return <p key={incident.id}><strong>{alert.location} — {alert.title}:</strong> {alert.description}</p>;
-                  })}
+                  })}</> : <p><a href="#service-alerts">View service alerts</a></p>}
                   {affected.size > 0 && <small>Affected: {[...affected].join(", ")}</small>}
                 </div>
               ) : (
@@ -281,7 +324,6 @@ function HomePage({
   const selectedStation = network.stations.find((station) => station.id === selectedStationId);
   const selectedTrain = world.trains.find((train) => train.id === selectedTrainId && !["reserve", "withdrawn"].includes(train.state));
   const selectedLine = selectedTrain ? lineFor(network, selectedTrain.line) : undefined;
-  const activeIncidents = world.incidents.filter((incident) => incident.state === "active");
 
   return (
     <main>
@@ -291,12 +333,6 @@ function HomePage({
       </section>
 
       <JourneyPlanner network={network} world={world} />
-      <section className="public-service-summary" aria-label="Service summary">
-        <div><strong>{stale ? "Service updates delayed" : "Service now"}</strong><a href="#status">{stale ? "Check last reported alerts" : activeIncidents.length ? `${activeIncidents.length} service ${activeIncidents.length === 1 ? "alert" : "alerts"}` : "No service alerts reported"} →</a></div>
-        <div className="summary-lines">
-          {network.lines.map((line) => <a href={`#line-${line.id.toLowerCase()}`} key={line.id}><span className={`line-pill line-pill--${line.id.toLowerCase()}`}>{line.id}</span><span>{stale ? "Status unavailable" : lineIncidents(line, world.trains, world.incidents).length ? "Service alert" : "No service alerts"}</span></a>)}
-        </div>
-      </section>
       <ServiceStatus world={world} network={network} stale={stale} />
 
       <section className="public-section public-map-section" id="map">
@@ -475,11 +511,13 @@ export function PassengerApp() {
   const worldState = useWorld();
   const capabilities = useCapabilities();
   const { path, navigate } = usePath();
+  const stationMatch = path.match(/^\/stations\/([^/]+)\/?$/);
 
   if (worldState.loading && !worldState.data) {
     return (
       <div className="passenger-app">
-        <PassengerHeader onNavigate={navigate} />
+        {!stationMatch && <ServiceAlerts />}
+        <PassengerHeader onNavigate={navigate} showClock={Boolean(stationMatch)} />
         <main>
           <section className="passenger-hero page-loading">
             <p role="status">Loading service information…</p>
@@ -500,11 +538,11 @@ export function PassengerApp() {
 
   const { world, network } = worldState.data;
   const stale = worldState.data.stale || Boolean(worldState.error);
-  const stationMatch = path.match(/^\/stations\/([^/]+)\/?$/);
   return (
     <div className="passenger-app">
-      <PassengerHeader onNavigate={navigate} simulatedTime={world.simTime} stale={stale} />
-      {stale && (
+      {!stationMatch && <ServiceAlerts snapshot={worldState.data} stale={stale} />}
+      <PassengerHeader onNavigate={navigate} simulatedTime={world.simTime} stale={stale} showClock={Boolean(stationMatch)} />
+      {stale && stationMatch && (
         <div className="public-data-warning">
           Service updates are delayed. Last updated {formatPassengerDateTime(world.updatedAt)}. Check again before travelling.
         </div>

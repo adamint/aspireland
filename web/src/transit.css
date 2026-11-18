@@ -85,6 +85,32 @@ html[data-site="passenger"], .passenger-app {
 }
 .public-sim-banner strong { font: 600 .78rem var(--font-data); }
 .public-sim-banner > span:first-child { text-transform: none; font-weight: 400; }
+.public-service-alerts { background: var(--paper); color: var(--ink); border-bottom: 1px solid var(--border); }
+.public-service-alerts--warning { background: #fff3d4; color: #4c3818; border-color: #e2c481; }
+.public-service-alerts-inner {
+  max-width: 1440px;
+  margin: auto;
+  padding: 8px clamp(20px, 5vw, 72px);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px 24px;
+  align-items: start;
+  font-size: .85rem;
+  line-height: 1.5;
+}
+.public-service-alerts-label { display: flex; align-items: center; gap: 8px; min-height: 44px; }
+.public-service-alerts-label svg { width: 22px; height: 22px; flex: none; }
+.public-service-alerts h2 { margin: 0; font-size: .9rem; color: inherit; }
+.public-service-alerts details { min-width: 0; }
+.public-service-alerts summary { display: flex; align-items: center; gap: 12px; min-height: 44px; cursor: pointer; }
+.public-service-alerts summary::-webkit-details-marker { display: none; }
+.public-alerts-action { text-decoration: underline; text-underline-offset: 3px; }
+.public-alerts-toggle { width: 16px; height: 16px; flex: none; }
+.public-service-alerts details[open] .public-alerts-toggle { transform: rotate(180deg); }
+.public-service-alerts ul { list-style: none; display: grid; gap: 12px; margin: 8px 0; padding: 0; }
+.public-service-alerts li { display: grid; max-width: 80ch; gap: 2px; overflow-wrap: anywhere; }
+.public-service-alerts p { display: flex; flex-direction: column; justify-content: center; min-height: 44px; margin: 0; }
+.public-service-alerts a, .passenger-app .line-alerts a { color: inherit; text-underline-offset: 3px; }
 .passenger-header {
   min-height: 68px;
   background: var(--paper);
@@ -147,18 +173,6 @@ html[data-site="passenger"], .passenger-app {
 .accessible-check input { accent-color: var(--brand); width: 20px; height: 20px; }
 .journey-options .public-primary-button { margin-left: auto; }
 .journey-form .notice { margin-top: 12px; }
-.public-service-summary {
-  max-width: 1296px;
-  margin: 0 max(clamp(20px, 5vw, 72px), calc((100vw - 1296px) / 2));
-  padding: 16px 0;
-  border-top: 2px solid var(--ink);
-  border-bottom: 1px solid var(--border);
-}
-.public-service-summary > div:first-child { display: flex; justify-content: space-between; gap: 12px; }
-.public-service-summary a { color: var(--ink); font-size: .85rem; }
-.summary-lines { display: flex; flex-wrap: wrap; gap: 12px 24px; margin-top: 12px; }
-.summary-lines a { display: flex; align-items: center; gap: 8px; text-decoration: none; min-height: 32px; }
-.summary-lines .line-pill { min-width: 44px; text-align: center; }
 .line-status-card, .public-board-preview, .access-good, .accessibility-updates article { background: var(--paper); border-color: var(--border); }
 .line-status-card--alert { border-color: #bb8b68; }
 .line-status-card header small, .line-status-card > p, .line-alerts { color: var(--muted); font-size: .83rem; }
@@ -482,6 +496,9 @@ html[data-site="passenger"], .passenger-app {
   .ops-app { --ops-gutter: 16px; }
   .public-sim-banner { display: grid; justify-content: start; padding: 6px 14px; gap: 3px; font-size: .72rem; }
   .public-sim-banner strong { font-size: .75rem; }
+  .public-service-alerts-inner { padding: 8px 16px; gap: 12px; font-size: .8rem; }
+  .public-service-alerts h2 { font-size: .85rem; }
+  .public-alerts-action { display: none; }
   .passenger-header { min-height: 64px; }
   .header-access-link { min-height: 44px; display: grid; place-items: center; font-size: .78rem; }
   .transit-mark { width: 35px; height: 35px; }
@@ -501,10 +518,6 @@ html[data-site="passenger"], .passenger-app {
   .journey-options .public-primary-button { margin-left: 0; min-height: 48px; }
   .journey-form label { gap: 4px; }
   .segmented--light { display: grid; grid-template-columns: 1fr 1fr; }
-  .public-service-summary { margin: 0 16px; padding: 14px 0; }
-  .public-service-summary > div:first-child { flex-wrap: wrap; gap: 6px; }
-  .summary-lines { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; margin-top: 8px; }
-  .summary-lines a { font-size: .78rem; min-height: 44px; }
   .section-heading h2 { font-size: 1.5rem; }
   .line-status-grid { gap: 8px; }
   .line-status-card { padding: 12px; }

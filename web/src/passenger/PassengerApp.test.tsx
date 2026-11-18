@@ -136,6 +136,46 @@ it.each([false, true])("keeps trip help independent of transcription availabilit
   expect(screen.queryByText(/Push to talk/i)).toBeNull();
 });
 
+const serviceIncident = {
+  id: "trunk-closure",
+  kind: "segment-closure",
+  target: "westhaven>old-town",
+  state: "active",
+  source: "manual",
+  description: "Shared track closed",
+  startedAt: baseWorld.simTime,
+  severity: 1,
+};
+
+it("puts active service alerts above the home header without a duplicate lower summary", () => {
+  showWorld({ ...baseWorld, incidents: [serviceIncident, { ...serviceIncident, id: "cleared", state: "cleared" }] });
+  render(<PassengerApp />);
+
+  const alerts = screen.getByRole("region", { name: "Service alerts" });
+  const header = screen.getByRole("navigation", { name: "Passenger navigation" }).closest("header")!;
+  expect(alerts.compareDocumentPosition(header) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(within(alerts).getByText("1 service alert")).toBeTruthy();
+  expect(within(alerts).getByText("Between Westhaven and Old Town — Track section closed")).toBeTruthy();
+  expect(within(alerts).getByText("Service between these stations is affected. Check your route before travelling.")).toBeTruthy();
+  expect(screen.getAllByText("Between Westhaven and Old Town — Track section closed")).toHaveLength(1);
+  expect(screen.queryByRole("region", { name: "Service summary" })).toBeNull();
+  expect(screen.queryByText("Travel date and time")).toBeNull();
+  expect(screen.getByText("Leave now at")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Leave later" }));
+  expect(screen.getByLabelText("Departure date and time")).toBeTruthy();
+});
+
+it.each([[true, null], [false, "Refresh failed"]] as const)("does not present old top alerts as current (%s, %s)", (stale, error) => {
+  showWorld({ ...baseWorld, incidents: [serviceIncident] }, stale, error);
+  render(<PassengerApp />);
+
+  const alerts = screen.getByRole("region", { name: "Service alerts" });
+  expect(within(alerts).getByText("Live service alerts unavailable")).toBeTruthy();
+  expect(within(alerts).getByText(/Service updates are delayed\. Last updated/)).toBeTruthy();
+  expect(within(alerts).queryByText("1 service alert")).toBeNull();
+  expect(within(alerts).queryByText(/Track section closed/)).toBeNull();
+});
+
 it.each(["westhaven>old-town", "old-town>westhaven"])(
   "associates shared adjacent segment closure %s with both affected lines",
   (target) => {
