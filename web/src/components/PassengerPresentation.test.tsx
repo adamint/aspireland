@@ -79,23 +79,29 @@ it("uses passenger-facing station and platform labels in itinerary cards", () =>
 });
 
 it.each([
-  [60, 100, false, "Space available"],
-  [61, 100, false, "Busy"],
-  [85, 100, false, "Busy"],
-  [86, 100, false, "Very crowded"],
+  [60, 100, false, null],
+  [0, 100, false, null],
+  [110, 100, false, null],
   [0, 0, false, "Capacity not reported"],
   [86, 100, true, "Live crowding unavailable"],
-] as const)("keeps rider board crowding concise for %s/%s (stale: %s)", (load, capacity, stale, label) => {
+] as const)("only shows a rider capacity meter for a current %s/%s reading (stale: %s)", (load, capacity, stale, fallback) => {
   const board: StationBoard = { stationId: "university", scenarioId: "current", generation: 4, asOf: journey.asOf,
     updatedAt: journey.asOf, stale, restrictions: [],
     arrivals: [{ trainId: "green-1", line: "Green", service: "local", platform: "university:Green:+", destination: "southbank",
       seconds: 60, predictionKind: "live", status: "on-time", load, capacity }] };
-  const view = render(<StationBoardView passenger board={board} network={network} scenarioId="current" generation={4} loading={false} error={null} />);
+  render(<StationBoardView passenger board={board} network={network} scenarioId="current" generation={4} loading={false} error={null} />);
   const crowding = screen.getAllByRole("cell")[3];
-  expect(within(crowding).queryByText(/passenger capacity|people onboard|Updates are delayed/)).toBeNull();
-  expect(view.container.querySelector(".load-meter")).toBeNull();
   expect(screen.getByRole("columnheader", { name: "Crowding" })).toBeTruthy();
-  expect(crowding.textContent).toBe(`Crowding: ${label}`);
+  const meter = within(crowding).queryByRole("meter", { name: "Onboard capacity" });
+  if (fallback) {
+    expect(meter).toBeNull();
+    expect(crowding.textContent).toBe(fallback);
+  } else {
+    expect(crowding.textContent).toBe("");
+    expect(meter?.getAttribute("aria-valuenow")).toBe(String(Math.min(load, capacity)));
+    expect(meter?.getAttribute("aria-valuemax")).toBe(String(capacity));
+    expect(meter?.getAttribute("aria-valuetext")).toBe(`${load} of ${capacity} passenger capacity`);
+  }
 });
 
 it("separates multi-stop travel, waits and exits without internal IDs", () => {

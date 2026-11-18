@@ -1,6 +1,6 @@
 import { formatEta, formatPassengerDateTime, formatSimTimestamp, formatWallTimestamp, publicPlatformLabel, stationName, titleCase } from "../format";
 import type { NetworkDefinition, StationBoard } from "../types";
-import { publicOnboardCrowding } from "../passengerData";
+import { PassengerCapacity } from "./PassengerCapacity";
 
 interface StationBoardViewProps {
   board: StationBoard | null;
@@ -61,7 +61,6 @@ export function StationBoardView({
         </div>
         {board.arrivals.map((arrival) => {
           const ratio = arrival.load / Math.max(1, arrival.capacity);
-          const crowding = publicOnboardCrowding(arrival.load, arrival.capacity, unavailable);
           const destination = stationName(network, arrival.destination);
           const terminatesHere = arrival.destination === board.stationId;
           const publicPlatform = publicPlatformLabel(network, board.stationId, arrival.line, arrival.destination, arrival.platform);
@@ -82,10 +81,7 @@ export function StationBoardView({
                 {!unavailable && <small>{arrival.predictionKind === "live" ? "Live update" : "Estimated"} · {titleCase(arrival.status)}</small>}
               </span>
               <span role="cell">
-                {passenger ? <>
-                  <span className="crowding-cell-title" aria-hidden="true">Crowding: </span>
-                  <strong>{crowding.label}</strong>
-                </> : <>
+                {passenger ? <PassengerCapacity load={arrival.load} capacity={arrival.capacity} stale={unavailable} /> : <>
                   <span className={`load-meter ${ratio > 0.85 ? "critical" : ratio > 0.6 ? "busy" : ""}`}>
                     <i style={{ width: `${Math.min(100, ratio * 100)}%` }} />
                   </span>

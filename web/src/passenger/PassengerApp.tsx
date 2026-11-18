@@ -3,11 +3,12 @@ import { api } from "../api";
 import { AssistantPanel } from "../components/AssistantPanel";
 import { JourneyCards } from "../components/JourneyCards";
 import { NetworkMap } from "../components/NetworkMap";
+import { PassengerCapacity } from "../components/PassengerCapacity";
 import { StationBoardView } from "../components/StationBoardView";
 import { TransitBrand } from "../components/TransitBrand";
 import { formatPassengerDateTime, formatDateTimeLocal, formatDuration, lineFor, parseSimulatedLocalInput, stationName, titleCase, viewerTimeZone } from "../format";
 import { useCapabilities, useStationBoard, useWorld } from "../hooks";
-import { activeStationIncidents, lineIncidents, publicAlert, publicOnboardCrowding, publicTrainStatus } from "../passengerData";
+import { activeStationIncidents, lineIncidents, publicAlert, publicTrainStatus } from "../passengerData";
 import interLicense from "../inter-OFL.txt?url";
 import type { JourneyResult, NetworkDefinition, TrainState, WorldSnapshot, WorldState } from "../types";
 
@@ -289,7 +290,6 @@ function TrainFacts({ train, network, stale }: { train: TrainState; network: Net
   const nextStation = network.stations.find((station) => station.id === train.nextStationId);
   const inService = !["reserve", "withdrawn"].includes(train.state);
   const locationLabel = stale || train.state === "uncertain" ? "Last reported station" : train.state === "travelling" ? "Departed" : "Current station";
-  const crowding = publicOnboardCrowding(train.load, train.capacity, stale);
   return (
     <dl className="public-train-facts">
       <div><dt>{stale ? "Last reported status" : "Status"}</dt><dd>{publicTrainStatus(train.state)}</dd></div>
@@ -297,7 +297,7 @@ function TrainFacts({ train, network, stale }: { train: TrainState; network: Net
       {inService && <div><dt>{stale ? "Last reported next station" : "Next station"}</dt><dd>{nextStation?.name ?? "Not reported"}</dd></div>}
       {inService && <div>
         <dt>Onboard crowding</dt>
-        <dd className="public-crowding"><strong>{crowding.label}</strong><span>{crowding.detail}</span></dd>
+        <dd><PassengerCapacity load={train.load} capacity={train.capacity} stale={stale} /></dd>
       </div>}
     </dl>
   );
