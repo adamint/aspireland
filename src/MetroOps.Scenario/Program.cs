@@ -3,7 +3,7 @@ using MetroOps.ServiceDefaults;
 using MetroOps.Simulation.Persistence;
 
 var builder = WebApplication.CreateBuilder(args);
-builder.AddMetroDefaults(ready: false);
+builder.AddScenarioDefaults();
 builder.AddSimulationPersistence();
 builder.AddRabbitMQClient("events", settings => settings.DisableAutoActivation = true);
 builder.Services.AddHostedService<ScenarioLoop>();

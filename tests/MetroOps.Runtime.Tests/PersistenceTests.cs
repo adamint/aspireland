@@ -4,20 +4,82 @@ using MetroOps.Information;
 using MetroOps.Scenario;
 using MetroOps.ServiceDefaults;
 using MetroOps.Simulation.Persistence;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
+using OpenTelemetry;
+using OpenTelemetry.Trace;
 using RabbitMQ.Client;
 using StackExchange.Redis;
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Xunit.Abstractions;
 
 namespace MetroOps.Runtime.Tests;
 
-public sealed class PersistenceTests
+public sealed class PersistenceTests(ITestOutputHelper output)
 {
+    [PersistenceFact]
+    public async Task Scenario_exports_database_errors_and_request_children_but_not_successful_database_roots()
+    {
+        await using var fixture = TestDataSource();
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Configuration["ConnectionStrings:metro"] = fixture.ConnectionString;
+        builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"] = null;
+        builder.AddScenarioDefaults();
+        builder.AddSimulationPersistence();
+        var exporter = new TraceCapture();
+        builder.Services.AddOpenTelemetry().WithTracing(t => t.AddProcessor(new BatchActivityExportProcessor(exporter)));
+        await using var app = builder.Build();
+        ScenarioRoutes.Map(app);
+        await app.StartAsync();
+        var traces = app.Services.GetRequiredService<TracerProvider>();
+        var store = app.Services.GetRequiredService<WorldStore>();
+        var dataSource = app.Services.GetRequiredService<NpgsqlDataSource>();
+        var outbox = new SnapshotOutbox(dataSource);
+        await store.Initialize(default);
+        Assert.True(traces.ForceFlush());
+        exporter.Spans.Clear();
+
+        for (var round = 0; round < 10; round++)
+        {
+            await store.Read(default);
+            await store.Mutate(world =>
+            {
+                world.SimTime = world.SimTime.AddSeconds(1);
+                return true;
+            }, default);
+            Assert.True(await OutboxPublisher.PublishPending(outbox, (_, _) => Task.CompletedTask, default));
+            Assert.Null(await outbox.ReadPending(default));
+        }
+
+        using var client = app.GetTestClient();
+        using var response = await client.GetAsync("/state");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        await using var failure = dataSource.CreateCommand("SELECT 1 / 0");
+        await Assert.ThrowsAsync<PostgresException>(() => failure.ExecuteScalarAsync());
+        Assert.True(traces.ForceFlush());
+
+        var request = Assert.Single(exporter.Spans, span => span.Kind == ActivityKind.Server);
+        var database = exporter.Spans.Where(span => span.Source.Name == "Npgsql").ToArray();
+        var successfulRoots = database.Count(span => span.ParentSpanId == default && span.Status != ActivityStatusCode.Error);
+        var failedRoots = database.Count(span => span.ParentSpanId == default && span.Status == ActivityStatusCode.Error);
+        var children = database.Where(span => span.ParentSpanId != default).ToArray();
+        output.WriteLine($"Npgsql exports: {successfulRoots} successful roots, {failedRoots} failed roots, {children.Length} child spans");
+        Assert.Equal(1, failedRoots);
+        var child = Assert.Single(children);
+        Assert.Equal(request.SpanId, child.ParentSpanId);
+        Assert.Equal(request.TraceId, child.TraceId);
+        Assert.Equal(0, successfulRoots);
+    }
+
     [PersistenceFact]
     public async Task Unchanged_transition_does_not_rewrite_or_publish_the_checkpoint()
     {
@@ -382,6 +444,17 @@ public sealed class PersistenceTests
             create.ExecuteNonQuery();
         connection.SearchPath = schema;
         return NpgsqlDataSource.Create(connection.ConnectionString);
+    }
+
+    private sealed class TraceCapture : BaseExporter<Activity>
+    {
+        public ConcurrentQueue<Activity> Spans { get; } = new();
+
+        public override ExportResult Export(in Batch<Activity> batch)
+        {
+            foreach (var span in batch) Spans.Enqueue(span);
+            return ExportResult.Success;
+        }
     }
 
     private sealed class BootstrapClientFactory(HttpClient client) : IHttpClientFactory

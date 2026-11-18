@@ -82,6 +82,10 @@ and summarize passenger inventory. The train
 workers talk to Control, and the optional model connections go only to the
 separate AI host. See [the resource table and walkthroughs](LEARNING.md).
 
+Scenario doesn't export successful standalone PostgreSQL spans, including the
+frequent checkpoint and outbox calls. PostgreSQL errors and spans that belong to
+a request still export, and database logs and metrics are unchanged.
+
 ## Run the tests
 
 Run `dotnet test MetroOps.slnx` for the .NET tests. Persistence tests opt in
