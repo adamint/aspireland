@@ -24,10 +24,10 @@ public static class Network
         new("southbank", "Southbank", 720, 1080, "residential", 120, 220, 1.1, .2, 0, .3)
     ],
     [
-        new("Blue", "Blue", "#4b8ff5", ["pinecrest", "westhaven", "west-junction", "civic-square", "central-exchange", "union-terminal", "east-junction", "riverbank", "eastgate"], 115, 480),
-        new("Amber", "Amber local", "#f0ac32", ["airport", "aerocity", "west-junction", "civic-square", "central-exchange", "union-terminal", "east-junction", "stadium", "fairgrounds"], 120, 1440),
-        new("Green", "Green", "#46b887", ["northgate", "university", "union-terminal", "museum-quarter", "central-exchange", "medical-center", "southbank"], 135, 600),
-        new("AX", "Airport Express", "#bd88ed", ["airport", "central-exchange", "union-terminal"], 300, 1440)
+        BuildLine("Blue", "Blue", "#4b8ff5", ["pinecrest", "westhaven", "west-junction", "civic-square", "central-exchange", "union-terminal", "east-junction", "riverbank", "eastgate"], 115, 480),
+        BuildLine("Amber", "Amber local", "#f0ac32", ["airport", "aerocity", "west-junction", "civic-square", "central-exchange", "union-terminal", "east-junction", "stadium", "fairgrounds"], 120, 1440),
+        BuildLine("Green", "Green", "#46b887", ["northgate", "university", "union-terminal", "museum-quarter", "central-exchange", "medical-center", "southbank"], 135, 600),
+        BuildLine("AX", "Airport Express", "#bd88ed", ["airport", "central-exchange", "union-terminal"], 300, 1440)
     ], BuildAccess());
 
     public static StationDefinition Station(string id) => Definition.Stations.First(s => s.Id == id);
@@ -35,13 +35,16 @@ public static class Network
     public static string Group(string line) => line is "Blue" or "Amber" ? "BA" : line;
     public static string Platform(string station, string line, int direction) => $"{station}:{Group(line)}:{(direction > 0 ? "+" : "-")}";
     public static string Block(string line, string from, string to) => $"{Group(line)}:{from}>{to}";
-    public static int TravelSeconds(string line, string from, string to) => (line, from, to) switch
+    public static int TravelSeconds(string line, string from, string to) =>
+        TravelSeconds(line, from, to, Line(line).TravelSeconds);
+
+    private static int TravelSeconds(string line, string from, string to, int defaultSeconds) => (line, from, to) switch
     {
         ("AX", "airport", "central-exchange") or ("AX", "central-exchange", "airport") => 1080,
         ("AX", _, _) => 105,
         ("Amber", "airport", "aerocity") or ("Amber", "aerocity", "airport") => 540,
         ("Amber", "aerocity", "west-junction") or ("Amber", "west-junction", "aerocity") => 480,
-        _ => Line(line).TravelSeconds
+        _ => defaultSeconds
     };
     public static string? Resolve(string text)
     {
@@ -64,6 +67,11 @@ public static class Network
                 return normalized[..^suffix.Length];
         return normalized;
     }
+
+    private static LineDefinition BuildLine(string id, string name, string color, string[] stations, int travelSeconds, int headwaySeconds) =>
+        new(id, name, color, stations, travelSeconds,
+            stations.Zip(stations.Skip(1), (from, to) => TravelSeconds(id, from, to, travelSeconds)).ToArray(),
+            headwaySeconds);
 
     private static List<AccessEdge> BuildAccess()
     {

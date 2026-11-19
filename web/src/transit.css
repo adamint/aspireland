@@ -175,6 +175,7 @@ html[data-site="passenger"], .passenger-app {
 .line-status-card, .public-board-preview, .access-good, .accessibility-updates article { background: var(--paper); border-color: var(--border); }
 .line-status-card--alert { border-color: #bb8b68; }
 .line-status-card header small, .line-status-card > p, .line-alerts { color: var(--muted); font-size: .83rem; }
+.line-alerts .text-button { padding: 0; font: inherit; cursor: pointer; }
 .status-good { color: var(--ink); }
 .status-alert { color: #833a2e; }
 .status-good, .status-alert { font-weight: 600; font-size: .8rem; font-family: inherit; }
@@ -277,6 +278,7 @@ html[data-site="passenger"], .passenger-app {
 .public-line-stops summary { min-height: 44px; padding: 12px 0; cursor: pointer; }
 .public-line-stops ol { margin: 0; padding-left: 24px; }
 .public-line-stops a { display: inline-flex; align-items: center; min-height: 44px; color: var(--brand); }
+.public-line-stops small { display: block; padding-bottom: 8px; color: var(--muted); }
 .network-map-shell--calm .crowd-halo { pointer-events: none; }
 .network-map-shell--calm .map-train:not([role="button"]) { cursor: inherit; }
 .network-map-shell--calm .map-train.selected > rect:first-child,

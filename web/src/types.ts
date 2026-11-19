@@ -24,6 +24,7 @@ export interface LineDefinition {
   color: string;
   stations: string[];
   travelSeconds: number;
+  segmentTravelSeconds?: number[];
   headwaySeconds: number;
 }
 

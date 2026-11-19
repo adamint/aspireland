@@ -41,7 +41,7 @@ function snapshot() {
         { id: secret, stationId: "airport", state: "onboard", count: 999, readyAt: time },
       ],
       incidents: [
-        { id: "alert", kind: "elevator-outage", target: "university", state: "active", description: "Lift unavailable.", startedAt: time, endsAt: secret, source: secret },
+        { id: "alert", kind: "elevator-outage", target: "university", state: "active", description: "Lift unavailable.", startedAt: time, endsAt: "2026-11-17T09:00:00Z", source: secret },
         { id: secret, kind: "door-fault", target: "ax-1", state: "pending", description: secret, startedAt: time },
         { id: secret, kind: "door-fault", target: "ax-1", state: "active", description: secret, startedAt: "2026-11-18T08:00:00Z" },
         { id: secret, kind: "door-fault", target: "ax-1", state: "cleared", description: secret, startedAt: time },
@@ -49,7 +49,10 @@ function snapshot() {
     },
     network: {
       stations: [station("university"), station("airport")],
-      lines: [{ id: "AX", name: "Airport Express", color: "#abcdef", stations: ["university", "airport"], travelSeconds: secret, headwaySeconds: secret }],
+      lines: [{
+        id: "AX", name: "Airport Express", color: "#abcdef", stations: ["university", "airport"],
+        travelSeconds: 300, segmentTravelSeconds: [1080], headwaySeconds: secret, private: secret,
+      }],
       accessEdges: [{ stationId: "university", from: "street", to: "platform", seconds: 30, peoplePerMinute: 50, accessible: true, equipmentId: null, private: secret }],
       policies: secret,
     },
@@ -263,6 +266,11 @@ test("projects the world, anonymous crowd totals and selectable train facts with
   assert.deepEqual(data.world.grants, {});
   assert.equal(data.world.incidents.length, 1);
   assert.equal(data.world.incidents[0].description, "Lift unavailable.");
+  assert.equal(data.world.incidents[0].endsAt, "2026-11-17T09:00:00Z");
+  assert.deepEqual(data.network.lines[0], {
+    id: "AX", name: "Airport Express", color: "#abcdef", stations: ["university", "airport"],
+    travelSeconds: 300, segmentTravelSeconds: [1080],
+  });
   assert.equal(data.stale, false);
   for (const key of ["seed", "history", "commands", "policies", "blockOccupancy", "randomStreams"]) {
     assert.equal(key in data.world, false, key);
@@ -579,6 +587,8 @@ test("fails closed on malformed world, board or itinerary data without leaking u
     { ...snapshot(), world: { ...snapshot().world, trains: null } },
     { ...snapshot(), world: { ...snapshot().world, simTime: "bad" } },
     { ...snapshot(), world: { ...snapshot().world, cohorts: [{ state: "platform", stationId: "university", count: "many", readyAt: time }] } },
+    { ...snapshot(), network: { ...snapshot().network, lines: [{ ...snapshot().network.lines[0], segmentTravelSeconds: [] }] } },
+    { ...snapshot(), network: { ...snapshot().network, lines: [{ ...snapshot().network.lines[0], segmentTravelSeconds: Array(101).fill(1) }] } },
   ]) {
     f.setHandler((_req, res) => { res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify(value)); });
     const response = await fetch(`${f.origin}/api/world`);

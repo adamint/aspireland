@@ -151,7 +151,7 @@ const networkShape = pick({
   lines: list(pick({
     id: shortText, name: shortText, color: (value) => {
       check(typeof value === "string" && /^#[\da-f]{6}$/i.test(value)); return value;
-    }, stations: list(stationId),
+    }, stations: list(stationId), travelSeconds: integer, segmentTravelSeconds: list(integer, 100),
   }), 100),
   accessEdges: list(pick({
     stationId, from: shortText, to: shortText, seconds: number,
@@ -164,6 +164,7 @@ const trainShape = pick({
 });
 const incidentShape = pick({
   id: shortText, kind: shortText, target: shortText, state: shortText, description: text,
+  endsAt: nullable(date),
 });
 
 function projectWorld(data) {
@@ -172,6 +173,7 @@ function projectWorld(data) {
   const ids = new Set(network.stations.map((station) => station.id));
   check(ids.size > 0 && ids.size === network.stations.length && network.lines.length > 0);
   check(network.lines.every((line) => line.stations.length > 0 && line.stations.every((id) => ids.has(id))));
+  check(network.lines.every((line) => line.segmentTravelSeconds.length === line.stations.length - 1));
   check(network.accessEdges.every((edge) => ids.has(edge.stationId)));
   const world = pick({
     scenarioId: shortText, generation: integer, version: integer, simTime: date,

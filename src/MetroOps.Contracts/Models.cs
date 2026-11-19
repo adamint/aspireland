@@ -128,7 +128,8 @@ public sealed class PassengerMetrics
 
 public sealed record StationDefinition(string Id, string Name, double X, double Y, string Character,
     int AccessPerMinute, int PlatformCapacity, double Residential, double Jobs, double Education, double Leisure);
-public sealed record LineDefinition(string Id, string Name, string Color, string[] Stations, int TravelSeconds, int HeadwaySeconds);
+public sealed record LineDefinition(string Id, string Name, string Color, string[] Stations, int TravelSeconds,
+    IReadOnlyList<int> SegmentTravelSeconds, int HeadwaySeconds);
 public sealed record AccessEdge(string StationId, string From, string To, int Seconds, int PeoplePerMinute, bool Accessible, string? EquipmentId);
 public sealed record NetworkDefinition(IReadOnlyList<StationDefinition> Stations, IReadOnlyList<LineDefinition> Lines, IReadOnlyList<AccessEdge> AccessEdges);
 public sealed record WorldSnapshot(WorldState World, NetworkDefinition Network, bool Stale = false, string? Warning = null);

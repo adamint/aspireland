@@ -45,8 +45,14 @@ function PassengerHeader({
   return (
     <>
       {showClock && <div className="public-sim-banner">
-        <span>{stale ? "Updates delayed" : "Travel date and time"}</span>
-        <strong>{simulatedTime ? formatPassengerDateTime(simulatedTime) : "Updating…"}</strong>
+        <span>
+          <i className={stale ? "stale" : ""} aria-hidden="true" />
+          <span>Simulation time</span>
+          {stale && <span className="sr-only">Updates delayed</span>}
+        </span>
+        <strong>{simulatedTime
+          ? <time dateTime={simulatedTime}>{formatLocalTime(simulatedTime, { date: "always" })}</time>
+          : "Updating…"}</strong>
       </div>}
       <header className="passenger-header">
         <button className="passenger-brand" onClick={() => onNavigate("/")} aria-label="Aspireland Transit home">
@@ -89,7 +95,11 @@ function ServiceAlerts({ snapshot, stale = false }: { snapshot?: WorldSnapshot; 
             <ul>
               {incidents.map((incident) => {
                 const alert = publicAlert(incident, snapshot.network, snapshot.world.trains);
-                return <li key={incident.id}><strong>{alert.location} — {alert.title}</strong><span>{alert.description}</span></li>;
+                return <li key={incident.id} id={`service-alert-${incident.id}`} tabIndex={-1}>
+                  <strong>{alert.location} — {alert.title}</strong>
+                  <span>{alert.description}</span>
+                  {incident.endsAt && <span>Restoration expected {formatPassengerDateTime(incident.endsAt)}.</span>}
+                </li>;
               })}
             </ul>
           </details>
@@ -109,7 +119,17 @@ function ServiceAlerts({ snapshot, stale = false }: { snapshot?: WorldSnapshot; 
   );
 }
 
-function ServiceStatus({ world, network, stale }: { world: WorldState; network: NetworkDefinition; stale: boolean }) {
+function ServiceStatus({
+  world,
+  network,
+  stale,
+  onViewAlert,
+}: {
+  world: WorldState;
+  network: NetworkDefinition;
+  stale: boolean;
+  onViewAlert: (incidentId: string) => void;
+}) {
   return (
     <section className="public-section status-section" id="status">
       <div className="section-heading">
@@ -143,7 +163,9 @@ function ServiceStatus({ world, network, stale }: { world: WorldState; network: 
                   {stale ? <><p>These are the last reported alerts.</p>{incidents.slice(0, 3).map((incident) => {
                     const alert = publicAlert(incident, network, world.trains);
                     return <p key={incident.id}><strong>{alert.location} — {alert.title}:</strong> {alert.description}</p>;
-                  })}</> : <p><a href="#service-alerts">View service alerts</a></p>}
+                  })}</> : <p><button className="text-button" type="button"
+                    aria-label={`View ${line.name} service alert`}
+                    onClick={() => onViewAlert(incidents[0].id)}>View service alerts</button></p>}
                   {affected.size > 0 && <small>Affected: {[...affected].join(", ")}</small>}
                 </div>
               ) : (
@@ -151,7 +173,13 @@ function ServiceStatus({ world, network, stale }: { world: WorldState; network: 
               )}
               <details className="public-line-stops">
                 <summary>Stops</summary>
-                <ol>{line.stations.map((id) => <li key={id}><a href={`/stations/${id}`}>{stationName(network, id)}</a></li>)}</ol>
+                <ol>{line.stations.map((id, index) => {
+                  const runningSeconds = index > 0 ? line.segmentTravelSeconds?.[index - 1] : undefined;
+                  return <li key={id}>
+                    <a href={`/stations/${id}`}>{stationName(network, id)}</a>
+                    {runningSeconds !== undefined && <small>{formatDuration(runningSeconds)} from previous stop</small>}
+                  </li>;
+                })}</ol>
               </details>
             </article>
           );
@@ -318,6 +346,7 @@ function HomePage({
   capabilities,
   capabilityError,
   onNavigate,
+  onViewAlert,
   stale,
 }: {
   world: WorldState;
@@ -325,9 +354,10 @@ function HomePage({
   capabilities: ReturnType<typeof useCapabilities>["data"];
   capabilityError: string | null;
   onNavigate: (path: string) => void;
+  onViewAlert: (incidentId: string) => void;
   stale: boolean;
 }) {
-  const [selectedStationId, setSelectedStationId] = useState<string | null>("central-exchange");
+  const [selectedStationId, setSelectedStationId] = useState<string | null>(null);
   const [selectedTrainId, setSelectedTrainId] = useState<string | null>(null);
   const board = useStationBoard(selectedStationId);
   const selectedStation = network.stations.find((station) => station.id === selectedStationId);
@@ -342,7 +372,7 @@ function HomePage({
       </section>
 
       <JourneyPlanner network={network} world={world} />
-      <ServiceStatus world={world} network={network} stale={stale} />
+      <ServiceStatus world={world} network={network} stale={stale} onViewAlert={onViewAlert} />
 
       <section className="public-section public-map-section" id="map">
         <div className="section-heading">
@@ -378,17 +408,19 @@ function HomePage({
                 </button>
               )}
             </div>
-            {selectedTrain ? <TrainFacts train={selectedTrain} network={network} stale={stale} /> : <StationBoardView
-              passenger
-              board={board.data}
-              network={network}
-              scenarioId={world.scenarioId}
-              generation={world.generation}
-              loading={board.loading}
-              error={board.error}
-              stale={stale}
-              compact
-            />}
+            {selectedTrain ? <TrainFacts train={selectedTrain} network={network} stale={stale} /> : selectedStationId ? (
+              <StationBoardView
+                passenger
+                board={board.data}
+                network={network}
+                scenarioId={world.scenarioId}
+                generation={world.generation}
+                loading={board.loading}
+                error={board.error}
+                stale={stale}
+                compact
+              />
+            ) : <p className="page-loading">Choose a station on the map or station list to see arrivals.</p>}
           </aside>
         </div>
       </section>
@@ -526,7 +558,7 @@ export function PassengerApp() {
     return (
       <div className="passenger-app">
         {!stationMatch && <ServiceAlerts />}
-        <PassengerHeader onNavigate={navigate} showClock={Boolean(stationMatch)} />
+        <PassengerHeader onNavigate={navigate} />
         <main>
           <section className="passenger-hero page-loading">
             <p role="status">Loading service information…</p>
@@ -547,10 +579,18 @@ export function PassengerApp() {
 
   const { world, network } = worldState.data;
   const stale = worldState.data.stale || Boolean(worldState.error);
+  const viewServiceAlert = (incidentId: string) => {
+    const target = document.getElementById(`service-alert-${incidentId}`);
+    if (!target) return;
+    const details = target.closest("details");
+    if (details instanceof HTMLDetailsElement) details.open = true;
+    target.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    target.focus();
+  };
   return (
     <div className="passenger-app">
       {!stationMatch && <ServiceAlerts snapshot={worldState.data} stale={stale} />}
-      <PassengerHeader onNavigate={navigate} simulatedTime={world.simTime} stale={stale} showClock={Boolean(stationMatch)} />
+      <PassengerHeader onNavigate={navigate} simulatedTime={world.simTime} stale={stale} />
       {stale && stationMatch && (
         <div className="public-data-warning">
           Service updates are delayed. Last updated {formatLocalTime(world.updatedAt, {
@@ -568,6 +608,7 @@ export function PassengerApp() {
           capabilities={capabilities.data}
           capabilityError={capabilities.error}
           onNavigate={navigate}
+          onViewAlert={viewServiceAlert}
           stale={stale}
         />
       )}

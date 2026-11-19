@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { PassengerApp } from "./PassengerApp";
+import { formatPassengerDateTime, formatSimTimestamp } from "../format";
 import type { NetworkDefinition, TrainState, WorldSnapshot, WorldState } from "../types";
 
 const { useWorld, useCapabilities, useStationBoard, journey } = vi.hoisted(() => ({
@@ -29,9 +30,9 @@ const network: NetworkDefinition = {
     { id: "university", name: "University", x: 400, y: 100, character: "campus", accessPerMinute: 100, platformCapacity: 100, residential: 0, jobs: 0, education: 1, leisure: 0 },
   ],
   lines: [
-    { id: "Blue", name: "Blue Line", color: "#4b8ff5", stations: ["westhaven", "old-town", "central-exchange"], travelSeconds: 120, headwaySeconds: 480 },
-    { id: "Amber", name: "Amber Line", color: "#f0a53a", stations: ["westhaven", "old-town", "university"], travelSeconds: 120, headwaySeconds: 480 },
-    { id: "Green", name: "Green Line", color: "#46b887", stations: ["old-town", "university"], travelSeconds: 120, headwaySeconds: 480 },
+    { id: "Blue", name: "Blue Line", color: "#4b8ff5", stations: ["westhaven", "old-town", "central-exchange"], travelSeconds: 120, segmentTravelSeconds: [90, 180], headwaySeconds: 480 },
+    { id: "Amber", name: "Amber Line", color: "#f0a53a", stations: ["westhaven", "old-town", "university"], travelSeconds: 120, segmentTravelSeconds: [540, 480], headwaySeconds: 480 },
+    { id: "Green", name: "Green Line", color: "#46b887", stations: ["old-town", "university"], travelSeconds: 120, segmentTravelSeconds: [135], headwaySeconds: 480 },
   ],
   accessEdges: [
     { stationId: "central-exchange", from: "concourse", to: "platform", seconds: 65, peoplePerMinute: 24, accessible: true, equipmentId: "central-exchange:elevator" },
@@ -119,6 +120,55 @@ it("announces loading in the main content area, then shows the trip planner", ()
   view.rerender(<PassengerApp />);
   expect(screen.queryByRole("status")).toBeNull();
   expect(screen.getByRole("button", { name: "Find a route" })).toBeTruthy();
+});
+
+it("starts home without a station or arrivals, then loads them after explicit selection", () => {
+  useStationBoard.mockReturnValue({
+    data: {
+      stationId: "central-exchange",
+      scenarioId: "scenario",
+      generation: 1,
+      asOf: baseWorld.simTime,
+      updatedAt: baseWorld.updatedAt,
+      stale: false,
+      arrivals: [],
+      restrictions: [],
+    },
+    error: null,
+    loading: false,
+    lastSuccess: new Date(),
+  });
+
+  render(<PassengerApp />);
+
+  expect(useStationBoard).toHaveBeenLastCalledWith(null);
+  const details = screen.getByRole("complementary", { name: "Map details" });
+  expect(within(details).getByRole("heading", { name: "Select a station" })).toBeTruthy();
+  expect(within(details).queryByText("Arrival times as of")).toBeNull();
+
+  fireEvent.click(screen.getByRole("button", { name: "Central Exchange station" }));
+
+  expect(useStationBoard).toHaveBeenLastCalledWith("central-exchange");
+  expect(within(details).getByRole("heading", { name: "Central Exchange" })).toBeTruthy();
+  expect(within(details).getByText(/Arrival times as of/)).toBeTruthy();
+});
+
+it("preserves canonical station deep links and loads their arrivals immediately", () => {
+  window.history.replaceState({}, "", "/stations/central-exchange");
+  render(<PassengerApp />);
+  expect(useStationBoard).toHaveBeenLastCalledWith("central-exchange");
+  expect(screen.getByRole("heading", { name: "Central Exchange" })).toBeTruthy();
+});
+
+it.each(["/", "/stations/central-exchange"])("shows local simulation time on %s with a distinct stale marker", (path) => {
+  window.history.replaceState({}, "", path);
+  showWorld(baseWorld, true);
+
+  const view = render(<PassengerApp />);
+  const banner = view.container.querySelector(".public-sim-banner")!;
+  expect(within(banner as HTMLElement).getByText("Simulation time")).toBeTruthy();
+  expect(within(banner as HTMLElement).getByText(formatSimTimestamp(baseWorld.simTime))).toBeTruthy();
+  expect(banner.querySelector("i.stale")).toBeTruthy();
 });
 
 it.each([false, true])("keeps trip help independent of transcription availability (%s)", (transcription) => {
@@ -213,6 +263,48 @@ it.each(["westhaven>old-town", "old-town>westhaven"])(
   },
 );
 
+it("opens and focuses the relevant shared alert from the correct line card", () => {
+  const greenIncident = {
+    ...serviceIncident,
+    id: "green-access",
+    kind: "station-closure",
+    target: "university",
+    description: "University closed",
+    endsAt: "2026-11-17T09:00:00Z",
+  };
+  showWorld({ ...baseWorld, incidents: [serviceIncident, greenIncident] });
+  const scrollIntoView = vi.fn();
+  HTMLElement.prototype.scrollIntoView = scrollIntoView;
+  render(<PassengerApp />);
+
+  const greenCard = screen.getByText("Green Line").closest("article") as HTMLElement;
+  const button = within(greenCard).getByRole("button", { name: "View Green Line service alert" });
+  expect(button.tagName).toBe("BUTTON");
+  fireEvent.click(button);
+
+  const target = screen.getByText("University — Station closed").closest("li")!;
+  expect(target.closest("details")?.hasAttribute("open")).toBe(true);
+  expect(document.activeElement).toBe(target);
+  expect(scrollIntoView).toHaveBeenCalledExactlyOnceWith({ behavior: "smooth", block: "center" });
+  expect(within(target).getByText(`Restoration expected ${formatPassengerDateTime(greenIncident.endsAt)}.`)).toBeTruthy();
+  expect(within(screen.getByText("Blue Line").closest("article") as HTMLElement)
+    .getByRole("button", { name: "View Blue Line service alert" })).toBeTruthy();
+  expect(within(screen.getByText("Amber Line").closest("article") as HTMLElement)
+    .getByRole("button", { name: "View Amber Line service alert" })).toBeTruthy();
+});
+
+it("shows running time from the previous stop without presenting it as a wait", () => {
+  render(<PassengerApp />);
+  const blue = screen.getByText("Blue Line").closest("article") as HTMLElement;
+  fireEvent.click(within(blue).getByText("Stops"));
+  const stops = within(blue).getAllByRole("listitem");
+
+  expect(stops[0].textContent).toBe("Westhaven");
+  expect(stops[1].textContent).toContain("2 min from previous stop");
+  expect(stops[2].textContent).toContain("3 min from previous stop");
+  expect(within(blue).queryByText(/wait/i)).toBeNull();
+});
+
 it("ignores cleared station incidents and restored equipment", () => {
   window.history.replaceState({}, "", "/stations/central-exchange");
   showWorld({
@@ -296,6 +388,7 @@ it("opens read-only train details and restores arrivals when the same station is
 it("keeps keyboard-selected train details current without inventing unknown locations", () => {
   showWorld({ ...baseWorld, trains: [train] });
   const view = render(<PassengerApp />);
+  fireEvent.click(screen.getByRole("button", { name: "Central Exchange station" }));
   const marker = screen.getByRole("button", { name: /^blue-1,/ });
   marker.focus();
   fireEvent.keyDown(marker, { key: "Enter" });
@@ -364,7 +457,7 @@ it("uses rider language and links a stopped train to its line status and stops",
   expect(within(lineStatus).getByText("Stops")).toBeTruthy();
   expect(within(lineStatus).getByRole("link", { name: "Old Town" }).getAttribute("href")).toBe("/stations/old-town");
   expect(screen.queryByText(/modeled|ordinary journey|planner-grounded|Dwelling/i)).toBeNull();
-  expect(view.container.textContent).not.toMatch(/simulat|synthetic/i);
+  expect(view.container.textContent).not.toMatch(/synthetic/i);
 });
 
 it.each([
