@@ -53,10 +53,15 @@ URL before starting the AppHost. Use a URL without credentials, a query, or
 a fragment. The `attendee-site` resource then links to **Attendee site (Dev Tunnel)**.
 This only adds a dashboard link; it doesn't create a tunnel or change access.
 
-In the redesigned dashboard, choose **Group resources** > **Tags** to group
-resources by role, or use **Filters** to show only `interactive` (the three
-site links). The other tags are `simulation`, `fleet`, `services`, `ai`,
-`infrastructure`, and `config`.
+The ungrouped resource list starts with **Rider site**, **Dispatch console**,
+and **Attendee site (Dev Tunnel)** (when configured), then AI, simulation,
+fleet, services, and infrastructure. Config parameters are in their own section.
+Use **Filters** to show only `interactive` without changing that order.
+
+**Group resources** > **Tags** starts with alphabetical tag groups. For the
+demo, drag the group headers into this order: `interactive`, `ai`, `simulation`,
+`fleet`, `services`, `infrastructure`, `config`. The dashboard remembers that
+order in your browser. The AppHost's display order doesn't apply inside tag groups.
 
 Use the dashboard to follow a request across the graph or run
 **Check passenger inventory** on `analytics` and **Inspect Airport arrivals**
