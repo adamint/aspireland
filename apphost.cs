@@ -312,12 +312,13 @@ if (!string.IsNullOrWhiteSpace(attendeeUrl))
         attendeeUri.Scheme == Uri.UriSchemeHttps && attendeeUri.Host.Length > 0 &&
         attendeeUri.UserInfo.Length == 0 && attendeeUri.Query.Length == 0 && attendeeUri.Fragment.Length == 0)
     {
+        // External services publish static URL annotations without running endpoint URL callbacks.
         builder.AddExternalService("attendee-site", attendeeUri)
-            .WithUrls(context =>
+            .WithAnnotation(new ResourceUrlAnnotation
             {
-                foreach (var url in context.Urls)
-                    url.DisplayText = "Attendee site (Dev Tunnel)";
-            })
+                Url = attendeeUri.ToString(),
+                DisplayText = "Attendee site (Dev Tunnel)"
+            }, ResourceAnnotationMutationBehavior.Replace)
             .WithTags("interactive");
     }
     else
