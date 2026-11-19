@@ -1,4 +1,5 @@
 #:package Aspire.Hosting.AppHost@17.0.0
+#:package Aspire.Hosting.DevTunnels@17.0.0
 #:package Aspire.Hosting.Dotnet@17.0.0
 #:package Aspire.Hosting.Foundry@17.0.0-preview.1.26567.5
 #:package Aspire.Hosting.JavaScript@17.0.0
@@ -20,6 +21,7 @@ using Aspire.Hosting.Dotnet;
 using Aspire.Hosting.Foundry;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using MetroOps.Contracts;
 
 var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions
@@ -315,7 +317,8 @@ var passengerWeb = builder.AddViteApp("passenger-web", "web").WithEnvironment("V
     .WithUrlForEndpoint("http", url => url.DisplayText = "Rider site")
     .WithTags("interactive").WithDisplayOrder(riderOrder);
 
-if (builder.Configuration.GetValue("MetroOps:StablePorts", false))
+var stablePorts = builder.Configuration.GetValue("MetroOps:StablePorts", false);
+if (stablePorts)
 {
     passengerWeb.WithEndpoint("http", endpoint => SetLoopbackPort(endpoint, 17381));
     operationsWeb.WithEndpoint("http", endpoint => SetLoopbackPort(endpoint, 17382));
@@ -328,26 +331,25 @@ static void SetLoopbackPort(EndpointAnnotation endpoint, int port)
     endpoint.TargetHost = "127.0.0.1";
 }
 
-var attendeeUrl = builder.Configuration["MetroOps:AttendeeUrl"];
-if (!string.IsNullOrWhiteSpace(attendeeUrl))
+var attendeeTunnelId = builder.Configuration["MetroOps:AttendeeTunnelId"];
+if (builder.ExecutionContext.IsRunMode && builder.Environment.IsDevelopment() && !stablePorts &&
+    !string.IsNullOrWhiteSpace(attendeeTunnelId))
 {
-    if (Uri.TryCreate(attendeeUrl, UriKind.Absolute, out var attendeeUri) &&
-        attendeeUri.Scheme == Uri.UriSchemeHttps && attendeeUri.Host.Length > 0 &&
-        attendeeUri.UserInfo.Length == 0 && attendeeUri.Query.Length == 0 && attendeeUri.Fragment.Length == 0)
-    {
-        // External services publish static URL annotations without running endpoint URL callbacks.
-        builder.AddExternalService("attendee-site", attendeeUri)
-            .WithAnnotation(new ResourceUrlAnnotation
-            {
-                Url = attendeeUri.ToString(),
-                DisplayText = "Attendee site (Dev Tunnel)"
-            }, ResourceAnnotationMutationBehavior.Replace)
-            .WithTags("interactive").WithDisplayOrder(attendeeOrder);
-    }
-    else
-    {
-        Console.Error.WriteLine("Skipping the attendee site link: MetroOps:AttendeeUrl must be an absolute HTTPS URL without credentials, a query, or a fragment.");
-    }
+    if (!attendeeTunnelId.StartsWith("metroops-dev-", StringComparison.Ordinal))
+        throw new InvalidOperationException("MetroOps:AttendeeTunnelId must start with 'metroops-dev-'. Use a dedicated private dev tunnel, not the demo tunnel.");
+
+    var passengerPort = passenger.GetEndpoint("http").Property(EndpointProperty.Port);
+    var attendee = builder.AddNodeApp("attendee-site", "web", "conference/server.mjs")
+        .WithHttpEndpoint(env: "CONFERENCE_PORT")
+        .WithEnvironment("PASSENGER_API_URL", ReferenceExpression.Create($"http://127.0.0.1:{passengerPort}"))
+        .WithHttpHealthCheck("/")
+        .WaitFor(passenger)
+        .WithTags("interactive").WithDisplayOrder(attendeeOrder);
+
+    builder.AddDevTunnel("attendee-tunnel", tunnelId: attendeeTunnelId)
+        .WithReference(attendee.GetEndpoint("http"), allowAnonymous: false)
+        .WaitFor(attendee)
+        .WithTags("interactive").WithDisplayOrder(attendeeOrder);
 }
 
 #pragma warning restore ASPIRERESOURCETRAITS001

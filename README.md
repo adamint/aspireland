@@ -46,15 +46,14 @@ Open **Rider site** on `passenger-web` or **Dispatch console** on
 `operations-web` in the Aspire Dashboard's Resources view. Local ports change
 between starts.
 
-If you're already hosting the attendee site through a Dev Tunnel, set
-`MetroOps__AttendeeUrl` (configuration key `MetroOps:AttendeeUrl`) to its HTTPS
-URL before starting the AppHost. Use a URL without credentials, a query, or
-a fragment. The `attendee-site` resource then links to **Attendee site (Dev Tunnel)**.
-This only adds a dashboard link; it doesn't create a tunnel or change access.
+For a signed-in preview of the sealed attendee site, see
+[Test with a private Dev Tunnel](docs/deploy.md#test-with-a-private-dev-tunnel).
+It's opt-in and separate from the shared demo QR.
 
-The ungrouped resource list starts with **Rider site**, **Dispatch console**,
-and **Attendee site (Dev Tunnel)** (when configured), then AI, simulation,
-fleet, services, and infrastructure. Config parameters are in their own section.
+The ungrouped resource list starts with **Rider site** and **Dispatch console**,
+then AI, simulation, fleet, services, and infrastructure. If you opt into the
+private tunnel, `attendee-site` and `attendee-tunnel` appear with the interactive
+resources. Config parameters are in their own section.
 Use **Filters** to show only `interactive` without changing that order.
 
 **Group resources** > **Tags** starts with alphabetical tag groups. For the
