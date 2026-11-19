@@ -108,11 +108,7 @@ public static partial class Kernel
         var travelSeconds = Network.TravelSeconds(train.Line, from, to);
         var denied = world.Cohorts
             .Where(c => c.State == "platform" && IsWaitingAt(c, world.SimTime) && c.StationId == from)
-            .Where(c =>
-            {
-                var leg = CurrentLeg(c);
-                return leg?.Line == train.Line && leg.From == from && TrainHeadsToward(train, leg.To);
-            })
+            .Where(c => CanBoard(train, CurrentLeg(c)))
             .Sum(c => c.Count);
         world.Metrics.DeniedBoardings += denied;
         var grant = new MovementGrant

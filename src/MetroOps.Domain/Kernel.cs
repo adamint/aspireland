@@ -145,13 +145,15 @@ public static partial class Kernel
 
     private static void ProcessPassengerSecond(WorldState world)
     {
+        var intervalStart = world.SimTime.AddSeconds(-1);
         foreach (var cohort in world.Cohorts)
         {
             if (cohort.State is not ("outside" or "platform" or "transfer")) continue;
-            var waiting = IsWaitingAt(cohort, world.SimTime);
-            if (waiting) world.Metrics.WaitingPassengerSeconds += cohort.Count;
-            if (!waiting && !(cohort.State == "transfer" && cohort.ReadyAt <= world.SimTime)) continue;
-            if ((world.SimTime - cohort.CreatedAt).TotalSeconds < cohort.PatienceSeconds) continue;
+            if (cohort.ReadyAt >= world.SimTime) continue;
+            var waited = (world.SimTime - Max(intervalStart, cohort.ReadyAt)).TotalSeconds;
+            cohort.ElapsedWaitSeconds += waited;
+            world.Metrics.WaitingPassengerSeconds += waited * cohort.Count;
+            if (cohort.ElapsedWaitSeconds < cohort.PatienceSeconds) continue;
             cohort.State = "abandoned";
             cohort.TrainId = null;
             world.Metrics.Abandoned += cohort.Count;
@@ -298,8 +300,7 @@ public static partial class Kernel
             foreach (var cohort in platform)
             {
                 if (cohort.State != "platform" || !IsWaitingAt(cohort, world.SimTime) || cohort.StationId != train.StationId) continue;
-                var leg = CurrentLeg(cohort);
-                if (leg?.Line != train.Line || leg.From != train.StationId || !TrainHeadsToward(train, leg.To)) continue;
+                if (!CanBoard(train, CurrentLeg(cohort))) continue;
                 var count = Math.Min(available, cohort.Count);
                 MovePart(world, cohort, count, "onboard", train.Id);
                 train.Load += count;
@@ -371,6 +372,11 @@ public static partial class Kernel
 
     private static JourneyLeg? CurrentLeg(Cohort cohort) =>
         cohort.LegIndex >= 0 && cohort.LegIndex < cohort.Legs.Count ? cohort.Legs[cohort.LegIndex] : null;
+
+    private static bool CanBoard(TrainState train, JourneyLeg? leg) =>
+        leg?.Line is { } line && leg.From == train.StationId
+        && Network.Group(line) == Network.Group(train.Line)
+        && TrainHeadsToward(train, leg.To);
 
     private static bool TrainHeadsToward(TrainState train, string destination)
     {

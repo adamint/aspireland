@@ -132,6 +132,32 @@ public sealed class KernelTests
     }
 
     [Fact]
+    public void Passenger_can_take_an_alternate_service_to_the_same_stop_on_the_shared_corridor()
+    {
+        var world = Kernel.Create();
+        foreach (var train in world.Trains) train.State = "withdrawn";
+        world.PlatformOccupancy.Clear();
+        var amber = Position(world, "amber-2", "Amber", "civic-square", 3, 1);
+        foreach (var (id, destination) in new[] { ("shared", "union-terminal"), ("blue-only", "riverbank") })
+        {
+            world.Cohorts.Add(new()
+            {
+                Id = id, Origin = "civic-square", Destination = destination, StationId = "civic-square",
+                Count = 5, State = "platform", CreatedAt = world.SimTime, ReadyAt = world.SimTime,
+                Legs = [new() { Kind = "ride", Line = "Blue", From = "civic-square", To = destination }]
+            });
+        }
+        world.Metrics.Generated = 10;
+
+        Kernel.Tick(world, [], 1);
+
+        Assert.Equal(5, amber.Load);
+        Assert.Equal("onboard", world.Cohorts.Single(c => c.Id == "shared").State);
+        Assert.Equal("platform", world.Cohorts.Single(c => c.Id == "blue-only").State);
+        Assert.Equal(10, Conserved(world));
+    }
+
+    [Fact]
     public void Compare_applies_candidate_headway_to_real_headless_movements()
     {
         var world = Kernel.Create(6543);
@@ -466,6 +492,119 @@ public sealed class KernelTests
         Assert.Equal(20, green.Load);
         Assert.Equal(20, world.Cohorts.Where(c => c.TrainId == green.Id).Sum(c => c.Count));
         Assert.Equal(20, Conserved(world));
+    }
+
+    [Fact]
+    public void Passenger_patience_survives_a_long_ride_and_transfer_walk()
+    {
+        var world = Kernel.Create();
+        foreach (var train in world.Trains) train.State = "withdrawn";
+        world.PlatformOccupancy.Clear();
+        Position(world, "ax-1", "AX", "airport", 0, 1);
+        Position(world, "green-1", "Green", "central-exchange", 4, 1).ReadyAt = world.SimTime.AddSeconds(1260);
+        world.Cohorts.Add(new()
+        {
+            Id = "airport-transfer", Origin = "airport", Destination = "medical-center",
+            StationId = "airport", Count = 5, State = "platform",
+            CreatedAt = world.SimTime, ReadyAt = world.SimTime, PatienceSeconds = 60,
+            Legs =
+            [
+                new() { Kind = "ride", Line = "AX", From = "airport", To = "central-exchange" },
+                new() { Kind = "ride", Line = "Green", From = "central-exchange", To = "medical-center" }
+            ]
+        });
+        world.Metrics.Generated = 5;
+
+        Kernel.Tick(world, [], 1500, driveTrains: true);
+
+        Assert.Equal(5, world.Metrics.Completed);
+        Assert.Equal(0, world.Metrics.Abandoned);
+        Assert.Equal(5, Conserved(world));
+    }
+
+    [Theory]
+    [InlineData("outside")]
+    [InlineData("platform")]
+    [InlineData("transfer")]
+    public void Passenger_patience_expires_only_after_waiting_while_ready(string state)
+    {
+        var world = Kernel.Create();
+        Assert.True(Kernel.Apply(world, Command(world, "incident", "airport", "station-closure", 3600)).Accepted);
+        var cohort = new Cohort
+        {
+            Id = "blocked", StationId = "airport", Count = 5, State = state,
+            CreatedAt = world.SimTime.AddHours(-1), ReadyAt = world.SimTime.AddMinutes(2), PatienceSeconds = 60
+        };
+        world.Cohorts.Add(cohort);
+        world.Metrics.Generated = 5;
+
+        Kernel.Tick(world, [], 120);
+        Assert.Equal(state, cohort.State);
+        Assert.Equal(0, world.Metrics.WaitingPassengerSeconds);
+        Kernel.Tick(world, [], 59);
+        Assert.Equal(state, cohort.State);
+        Assert.Equal(295, world.Metrics.WaitingPassengerSeconds);
+        Kernel.Tick(world, [], 1);
+
+        Assert.Equal("abandoned", cohort.State);
+        Assert.Equal(300, world.Metrics.WaitingPassengerSeconds);
+        Assert.Equal(5, world.Metrics.Abandoned);
+        Assert.Equal(5, Conserved(world));
+    }
+
+    [Fact]
+    public void Legacy_checkpoint_does_not_infer_wait_from_an_old_trip_start()
+    {
+        var world = Kernel.Create();
+        var legacy = System.Text.Json.JsonSerializer.Deserialize<Cohort>("""
+            {"id":"legacy-transfer","stationId":"central-exchange","count":1,"state":"transfer",
+             "createdAt":"2026-11-17T11:30:00Z","readyAt":"2026-11-17T12:30:00Z","patienceSeconds":60}
+            """, Wire.Json)!;
+        world.Cohorts.Add(legacy);
+        world.Metrics.Generated = 1;
+
+        Kernel.Tick(world, [], 1);
+
+        Assert.Equal("transfer", legacy.State);
+        Assert.Equal(1, legacy.ElapsedWaitSeconds);
+        Assert.Equal(1, Conserved(world));
+    }
+
+    [Fact]
+    public void Partial_boarding_and_checkpoint_reload_keep_wait_already_spent()
+    {
+        var world = Kernel.Create();
+        foreach (var train in world.Trains) train.State = "withdrawn";
+        world.PlatformOccupancy.Clear();
+        world.Cohorts.Add(new()
+        {
+            Id = "split", Origin = "airport", Destination = "medical-center",
+            StationId = "airport", Count = 8, State = "platform",
+            CreatedAt = world.SimTime, ReadyAt = world.SimTime, PatienceSeconds = 60,
+            Legs =
+            [
+                new() { Kind = "ride", Line = "AX", From = "airport", To = "central-exchange" },
+                new() { Kind = "ride", Line = "Green", From = "central-exchange", To = "medical-center" }
+            ]
+        });
+        world.Metrics.Generated = 8;
+        Kernel.Tick(world, [], 49);
+        var express = Position(world, "ax-1", "AX", "airport", 0, 1);
+        express.Capacity = 3;
+        Kernel.Tick(world, [], 1);
+        Assert.Equal(3, express.Load);
+        Assert.True(Kernel.Apply(world, Command(world, "incident", "central-exchange", "platform-closure", 3600)).Accepted);
+        Position(world, "ax-1", "AX", "central-exchange", 1, 1);
+        world = Wire.Clone(world);
+
+        Kernel.Tick(world, [], 110);
+        Assert.Equal(5, world.Metrics.Abandoned);
+        Assert.Equal("transfer", world.Cohorts.Single(c => c.Count == 3).State);
+        Kernel.Tick(world, [], 1);
+
+        Assert.Equal(8, world.Metrics.Abandoned);
+        Assert.Equal(480, world.Metrics.WaitingPassengerSeconds);
+        Assert.Equal(8, Conserved(world));
     }
 
     [Fact]

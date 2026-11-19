@@ -356,6 +356,13 @@ dwell and turnback time. The existing Blue 480-second floor remains a valid
 operating control without being advertised as a physically guaranteed
 eight-minute service.
 
+Passenger patience accumulates only when a rider is ready and waiting at an
+entrance, platform or transfer. Splits carry the wait already spent; movement
+and transfer walking don't spend patience. Old checkpoints have no per-cohort
+wait history, so in-progress trips start accumulating it on their next tick.
+On the shared Blue/Amber platforms, passengers take either train if it serves
+their planned alighting stop in the correct direction.
+
 ## 11. One identity across both sites
 
 The shared [brand rules](BRAND.md) use the official Aspire palette and locally

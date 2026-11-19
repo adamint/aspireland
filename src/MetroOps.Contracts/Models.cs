@@ -80,6 +80,7 @@ public sealed class Cohort
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset ReadyAt { get; set; }
     public double PatienceSeconds { get; set; } = 1800;
+    public double ElapsedWaitSeconds { get; set; }
     public List<JourneyLeg> Legs { get; set; } = [];
     public int LegIndex { get; set; }
     public DateTimeOffset? ReturnAt { get; set; }

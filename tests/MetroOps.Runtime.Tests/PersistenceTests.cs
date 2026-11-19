@@ -159,7 +159,7 @@ public sealed class PersistenceTests(ITestOutputHelper output)
                 new() { Id = "future", State = "outside", Count = 7, ReadyAt = world.SimTime.AddHours(1) },
                 new() { Id = "unknown", State = "unknown", Count = 2 },
                 new() { Id = "expires", State = "outside", Count = 1, ReadyAt = world.SimTime,
-                    CreatedAt = world.SimTime.AddMinutes(-2), PatienceSeconds = 60 }
+                    CreatedAt = world.SimTime.AddMinutes(-2), PatienceSeconds = 60, ElapsedWaitSeconds = 59 }
             ];
             world.Metrics.Generated = 18;
             world.Metrics.Completed = 5;
