@@ -59,9 +59,10 @@ aspire describe --non-interactive
 ```
 
 Use the `demo` profile for only one instance on the host. It keeps the dashboard
-at `https://localhost:17380`, Rider at `http://127.0.0.1:17381`, and Dispatch at
-`http://127.0.0.1:17382`. Use `aspire start --isolated --non-interactive`
-without the `demo` profile in other worktrees.
+at `https://localhost:17380` and links to Rider at `http://localhost:17381` and
+Dispatch at `http://localhost:17382`. Both sites still bind to `127.0.0.1`.
+Use `aspire start --isolated --non-interactive` without the `demo` profile in
+other worktrees.
 
 Start the attendee origin in a private terminal. The `demo` profile keeps the
 Passenger API upstream on `127.0.0.1:17383`; the attendee origin still listens
@@ -96,6 +97,13 @@ point to this same attendee origin only, never to the underlying services.
 For an existing shared QR, keep its tunnel managed outside Aspire and pointed
 only at the attendee listener on `127.0.0.1:6173`. In a maintenance window, use
 the manual `start:conference` command above if the listener needs restarting.
+Set `DEMO_TUNNEL_ID` to the existing tunnel ID and host it in a separate
+terminal. Keep both processes running while the QR is in use.
+
+```sh
+devtunnel host "$DEMO_TUNNEL_ID"
+```
+
 Don't recreate the tunnel or change its access rules. If you need to re-render
 the QR, set `ATTENDEE_URL` to the same attendee HTTPS URL:
 

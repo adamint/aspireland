@@ -306,18 +306,18 @@ foreach (var train in Fleet.Trains)
         .WaitFor(control);
 }
 
+var stablePorts = builder.Configuration.GetValue("MetroOps:StablePorts", false);
 var operationsWeb = builder.AddViteApp("operations-web", "web").WithEnvironment("VITE_SITE", "operations")
     .WithEnvironment("API_URL", operations.GetEndpoint("http")).WithEnvironment("OPERATOR_KEY", operatorKey)
     .WaitFor(operations).WithExternalHttpEndpoints()
-    .WithUrlForEndpoint("http", url => url.DisplayText = "Dispatch console")
+    .WithUrlForEndpoint("http", url => SetWebUrl(url, "Dispatch console", stablePorts))
     .WithTags("interactive").WithDisplayOrder(dispatchConsoleOrder);
 var passengerWeb = builder.AddViteApp("passenger-web", "web").WithEnvironment("VITE_SITE", "passenger")
     .WithEnvironment("API_URL", passenger.GetEndpoint("http"))
     .WaitFor(passenger).WithExternalHttpEndpoints()
-    .WithUrlForEndpoint("http", url => url.DisplayText = "Rider site")
+    .WithUrlForEndpoint("http", url => SetWebUrl(url, "Rider site", stablePorts))
     .WithTags("interactive").WithDisplayOrder(riderOrder);
 
-var stablePorts = builder.Configuration.GetValue("MetroOps:StablePorts", false);
 if (stablePorts)
 {
     passengerWeb.WithEndpoint("http", endpoint => SetLoopbackPort(endpoint, 17381));
@@ -329,6 +329,13 @@ static void SetLoopbackPort(EndpointAnnotation endpoint, int port)
 {
     endpoint.Port = port;
     endpoint.TargetHost = "127.0.0.1";
+}
+
+static void SetWebUrl(ResourceUrlAnnotation url, string displayText, bool stablePorts)
+{
+    url.DisplayText = displayText;
+    if (stablePorts)
+        url.Url = new UriBuilder(url.Url) { Host = "localhost" }.Uri.AbsoluteUri;
 }
 
 var attendeeTunnelId = builder.Configuration["MetroOps:AttendeeTunnelId"];
