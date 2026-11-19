@@ -73,6 +73,28 @@ public sealed class RoutingConsistencyTests
     }
 
     [Fact]
+    public void Step_free_check_accepts_an_old_paused_checkpoint_but_rejects_it_when_running()
+    {
+        var world = Kernel.Create();
+        Assert.True(Apply(world, new("incident", "east-junction", "elevator-outage", 600)).Accepted);
+        var request = new StepFreeRequest("east-junction", "airport");
+        var now = world.UpdatedAt.AddMinutes(1);
+
+        world.Paused = false;
+        var running = Kernel.CheckStepFree(world, request, now);
+        world.Paused = true;
+        var paused = Kernel.CheckStepFree(world, request, now);
+
+        Assert.True(running.Stale);
+        Assert.Null(running.OriginAccess);
+        Assert.Empty(running.Alternatives);
+        Assert.False(paused.Stale);
+        Assert.Equal(world.SimTime, paused.AsOf);
+        Assert.False(paused.OriginAccess!.Available);
+        Assert.Contains(paused.Alternatives, option => option.StationId == "union-terminal");
+    }
+
+    [Fact]
     public void Standalone_step_free_lookup_skips_blocked_stations_and_uses_multilink_surface_distances()
     {
         var world = Kernel.Create();

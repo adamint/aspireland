@@ -89,8 +89,9 @@ public static partial class Kernel
 
     public static StepFreeResult CheckStepFree(WorldState world, StepFreeRequest request, DateTimeOffset now)
     {
+        // Scenario stops advancing checkpoints while intentionally paused.
         var result = new StepFreeResult(world.ScenarioId, world.Generation, world.Version, world.SimTime,
-            now - world.UpdatedAt > TimeSpan.FromSeconds(10), null, null, [], []);
+            !world.Paused && now - world.UpdatedAt > TimeSpan.FromSeconds(10), null, null, [], []);
         if (result.Stale) return result;
 
         var origin = Network.Resolve(request.Origin);
