@@ -111,6 +111,14 @@ the QR, set `ATTENDEE_URL` to the same attendee HTTPS URL:
 uv run --script scripts/attendee-qr.py "$ATTENDEE_URL" --output attendee-qr.png
 ```
 
+Don't hand the existing QR tunnel to Aspire 17.0.0. It reconciles the ACL
+and ports on startup. Anonymous access in the model replaces an expiring
+allow with a permanent one; omitting the port policy clears explicit rules,
+and private mode adds a deny. Aspire can also remove unmodeled ports or
+recreate a port with different metadata. `WithExpiration` sets tunnel idle
+expiry, not ACL expiry. Keep external ownership until Aspire can preserve the
+existing port and its expiring access rule without rewriting them.
+
 ### Enable Signal text chat (optional)
 
 Use the sealed build from this revision; don't share the private Passenger
@@ -137,39 +145,6 @@ several model requests; these limits don't replace the provider's quota.
 Check one actual answer before sharing the URL. To turn attendee chat back
 off, restart just the attendee origin without `CONFERENCE_SIGNAL_CHAT=true`.
 No change to the tunnel, Aspire graph, or Foundry is needed to disable it.
-
-## Test with a private Dev Tunnel
-
-This is for local development, not the shared QR or the `demo` profile.
-Install the [Dev Tunnels CLI](https://learn.microsoft.com/azure/developer/dev-tunnels/get-started#install)
-and sign in with `devtunnel login`. Build the sealed attendee bundle before
-starting Aspire. Use a fresh `metroops-dev-` ID and Postgres volume for each
-test; don't reuse an ID or volume from another worktree or the demo.
-
-```sh
-npm ci --prefix web
-npm run build:conference --prefix web
-test_id="metroops-dev-$(openssl rand -hex 6)"
-MetroOps__AttendeeTunnelId="$test_id" \
-  MetroOps__PostgresVolume="$test_id-pg" \
-  aspire start --isolated --non-interactive
-aspire wait attendee-tunnel-attendee-site-http --timeout 180 --non-interactive
-aspire describe --non-interactive
-```
-
-Open the HTTPS link on the `attendee-tunnel-attendee-site-http` resource in
-the Aspire Dashboard. It requires sign-in and forwards only to `attendee-site`,
-the loopback Node gateway. Leave `MetroOps__AttendeeTunnelId` unset for normal
-worktree runs. After the test, run `aspire stop --non-interactive` and delete
-only the test tunnel you created, using its exact region-qualified ID.
-
-Don't hand the existing QR tunnel to Aspire 17.0.0. It reconciles the ACL
-and ports on startup. Anonymous access in the model replaces an expiring
-allow with a permanent one; omitting the port policy clears explicit rules,
-and private mode adds a deny. Aspire can also remove unmodeled ports or
-recreate a port with different metadata. `WithExpiration` sets tunnel idle
-expiry, not ACL expiry. Keep external ownership until Aspire can preserve the
-existing port and its expiring access rule without rewriting them.
 
 ## Check from outside
 

@@ -46,14 +46,9 @@ Open **Rider site** on `passenger-web` or **Dispatch console** on
 `operations-web` in the Aspire Dashboard's Resources view. Local ports change
 between starts.
 
-For a signed-in preview of the sealed attendee site, see
-[Test with a private Dev Tunnel](docs/deploy.md#test-with-a-private-dev-tunnel).
-It's opt-in and separate from the shared demo QR.
-
 The ungrouped resource list starts with **Rider site** and **Dispatch console**,
-then AI, simulation, fleet, services, and infrastructure. If you opt into the
-private tunnel, `attendee-site` and `attendee-tunnel` appear with the interactive
-resources. Config parameters are in their own section.
+then AI, simulation, fleet, services, and infrastructure. Config parameters are
+in their own section.
 Use **Filters** to show only `interactive` without changing that order.
 
 **Group resources** > **Tags** starts with alphabetical tag groups. For the

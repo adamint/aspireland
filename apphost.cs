@@ -1,5 +1,4 @@
 #:package Aspire.Hosting.AppHost@17.0.0
-#:package Aspire.Hosting.DevTunnels@17.0.0
 #:package Aspire.Hosting.Dotnet@17.0.0
 #:package Aspire.Hosting.Foundry@17.0.0-preview.1.26567.5
 #:package Aspire.Hosting.JavaScript@17.0.0
@@ -21,7 +20,6 @@ using Aspire.Hosting.Dotnet;
 using Aspire.Hosting.Foundry;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using MetroOps.Contracts;
 
 var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions
@@ -44,7 +42,6 @@ builder.Services.AddHttpClient(demoCommandClient, client => client.Timeout = Tim
 
 const int riderOrder = 730;
 const int dispatchConsoleOrder = 720;
-const int attendeeOrder = 710;
 const int aiOrder = 600;
 const int simulationOrder = 500;
 const int fleetOrder = 400;
@@ -336,27 +333,6 @@ static void SetWebUrl(ResourceUrlAnnotation url, string displayText, bool stable
     url.DisplayText = displayText;
     if (stablePorts)
         url.Url = new UriBuilder(url.Url) { Host = "localhost" }.Uri.AbsoluteUri;
-}
-
-var attendeeTunnelId = builder.Configuration["MetroOps:AttendeeTunnelId"];
-if (builder.ExecutionContext.IsRunMode && builder.Environment.IsDevelopment() && !stablePorts &&
-    !string.IsNullOrWhiteSpace(attendeeTunnelId))
-{
-    if (!attendeeTunnelId.StartsWith("metroops-dev-", StringComparison.Ordinal))
-        throw new InvalidOperationException("MetroOps:AttendeeTunnelId must start with 'metroops-dev-'. Use a dedicated private dev tunnel, not the demo tunnel.");
-
-    var passengerPort = passenger.GetEndpoint("http").Property(EndpointProperty.Port);
-    var attendee = builder.AddNodeApp("attendee-site", "web", "conference/server.mjs")
-        .WithHttpEndpoint(env: "CONFERENCE_PORT")
-        .WithEnvironment("PASSENGER_API_URL", ReferenceExpression.Create($"http://127.0.0.1:{passengerPort}"))
-        .WithHttpHealthCheck("/")
-        .WaitFor(passenger)
-        .WithTags("interactive").WithDisplayOrder(attendeeOrder);
-
-    builder.AddDevTunnel("attendee-tunnel", tunnelId: attendeeTunnelId)
-        .WithReference(attendee.GetEndpoint("http"), allowAnonymous: false)
-        .WaitFor(attendee)
-        .WithTags("interactive").WithDisplayOrder(attendeeOrder);
 }
 
 #pragma warning restore ASPIRERESOURCETRAITS001
