@@ -2416,6 +2416,11 @@ html[data-site="passenger"] {
   padding: 18px;
 }
 
+.public-board-preview > .page-loading {
+  margin: 0;
+  padding: 18px;
+}
+
 .board-preview-heading h3 {
   margin: 3px 0 5px;
   color: #1e383b;
