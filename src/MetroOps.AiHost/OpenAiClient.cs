@@ -53,6 +53,8 @@ internal sealed class OpenAiClient(OpenAiSettings settings, OpenAIClient? client
         var timing = passenger
             ? AiEndpoints.ResolvePassengerTripTiming(request, serviceTime, viewerTimeZone)
             : null;
+        if (timing?.Clarification is { } clarification)
+            return new AssistantResponse(clarification, JourneyContext: request.JourneyContext);
         var capture = new AssistantCapture(request.JourneyContext, viewerTimeZone, timing);
         if (passenger && capture.HasSavedOutbound && timing?.ReturnTime is not null)
         {

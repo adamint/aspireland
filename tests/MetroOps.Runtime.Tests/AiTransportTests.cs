@@ -202,6 +202,44 @@ public sealed class AiTransportTests
     }
 
     [Fact]
+    public void SignalUsesDifferentOffsetsWhenARoundTripCrossesTheClockChange()
+    {
+        var dates = AiEndpoints.ResolvePassengerTripTiming(
+            new AssistantRequest("Round trip from airport to medical center on 2026-10-31 at 10:30 a.m., returning on 2026-11-01 at 3 p.m."),
+            DateTimeOffset.Parse("2026-10-31T12:00:00Z"),
+            AiEndpoints.ResolveViewerTimeZone("America/New_York"));
+
+        Assert.NotNull(dates);
+        Assert.Equal(DateTimeOffset.Parse("2026-10-31T14:30:00Z"), dates.OutboundTime);
+        Assert.Equal(DateTimeOffset.Parse("2026-11-01T20:00:00Z"), dates.ReturnTime);
+    }
+
+    [Theory]
+    [InlineData("2026-03-08", "2:30 a.m.", "skips")]
+    [InlineData("2026-11-01", "1:30 a.m.", "repeats")]
+    public async Task SignalAsksForAnotherTimeWhenTheRidersClockSkipsOrRepeatsIt(
+        string date, string time, string reason)
+    {
+        using var modelHttp = new HttpClient(new Handler((_, _) =>
+            Task.FromResult(JsonResponse(TextResponse))));
+        using var serviceHttp = new HttpClient(new Handler((_, _) =>
+            throw new InvalidOperationException("The planner must not guess an instant.")));
+        var zone = AiEndpoints.ResolveViewerTimeZone("America/New_York");
+        var response = await Client(modelHttp).CompleteAsync(
+            new AssistantRequest(
+                $"Round trip from airport to medical center on {date} at {time}, returning at 3 p.m.",
+                ViewerTimeZone: zone.Id),
+            AiEndpoints.BuildSystemPrompt("passenger", null, zone),
+            new PassengerToolRegistry(new ProposalStore(), new ServiceJsonClient(serviceHttp)),
+            CancellationToken.None,
+            DateTimeOffset.Parse($"{date}T04:30:00Z"));
+
+        Assert.Contains("outbound", response.Text);
+        Assert.Contains(reason, response.Text);
+        Assert.Null(response.Journey);
+    }
+
+    [Fact]
     public async Task SignalReusesSavedOutboundWhenAGenuinelyMissingReturnGetsATimeOnlyReply()
     {
         const string firstQuestion = "Plan a round trip from airport to medical center. I arrive at 10:30 a.m. local time.";

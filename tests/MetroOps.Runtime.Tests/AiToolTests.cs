@@ -207,6 +207,32 @@ public sealed class AiToolTests
     }
 
     [Fact]
+    public void SeparatelyDatedRoundTripUsesBothExplicitDates()
+    {
+        var timing = AiEndpoints.ResolvePassengerTripTiming(
+            new AssistantRequest("Round trip from airport to medical center on November 20, 2026 at 10:30 a.m., returning on November 21, 2026 at 3 p.m."),
+            new DateTimeOffset(2026, 11, 18, 8, 0, 0, TimeSpan.Zero),
+            AiEndpoints.ResolveViewerTimeZone("Europe/Lisbon"));
+
+        Assert.NotNull(timing);
+        Assert.Equal(DateTimeOffset.Parse("2026-11-20T10:30:00+00:00"), timing.OutboundTime);
+        Assert.Equal(DateTimeOffset.Parse("2026-11-21T15:00:00+00:00"), timing.ReturnTime);
+    }
+
+    [Fact]
+    public void ReturnOnlyDateDoesNotMoveTheOutboundToThatDate()
+    {
+        var timing = AiEndpoints.ResolvePassengerTripTiming(
+            new AssistantRequest("Round trip from airport to medical center at 10:30 a.m., returning on November 21 at 3 p.m."),
+            new DateTimeOffset(2026, 11, 18, 8, 0, 0, TimeSpan.Zero),
+            AiEndpoints.ResolveViewerTimeZone("Europe/Lisbon"));
+
+        Assert.NotNull(timing);
+        Assert.Equal(DateTimeOffset.Parse("2026-11-18T10:30:00Z"), timing.OutboundTime);
+        Assert.Equal(DateTimeOffset.Parse("2026-11-21T15:00:00Z"), timing.ReturnTime);
+    }
+
+    [Fact]
     public void HoldAmountIsRetainedInStoredProposal()
     {
         using var arguments = JsonDocument.Parse(

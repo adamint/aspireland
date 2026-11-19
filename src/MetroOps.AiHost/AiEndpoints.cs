@@ -31,6 +31,9 @@ public static class AiEndpoints
     private static readonly Regex NamedDatePattern = new(
         @"\b(?<date>(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}(?:,\s*\d{4})?)\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex ReturnCuePattern = new(
+        @"\b(?:return(?:ing)?|(?:head(?:ing)?|go(?:ing)?|com(?:e|ing))\s+back)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     public static void ConfigureServices(WebApplicationBuilder builder)
     {
@@ -355,12 +358,19 @@ public static class AiEndpoints
                 .Select(match => (match.Index, Time: ParseTwentyFourHourTime(match))))
             .Where(item => item.Time is not null)
             .OrderBy(item => item.Index)
-            .Select(item => item.Time!.Value)
+            .Select(item => (item.Index, Time: item.Time!.Value))
             .ToArray();
         if (parsedTimes.Length == 0) return null;
 
         var localServiceTime = TimeZoneInfo.ConvertTime(serviceTime.Value, viewerTimeZone);
-        var explicitDate = ExplicitDate(request.Message, DateOnly.FromDateTime(localServiceTime.DateTime));
+        var serviceDate = DateOnly.FromDateTime(localServiceTime.DateTime);
+        var dates = IsoDatePattern.Matches(request.Message).Concat(NamedDatePattern.Matches(request.Message))
+            .OrderBy(match => match.Index)
+            .Select(match => (match.Index, Date: ExplicitDate(match.Groups["date"].Value, serviceDate)))
+            .Where(item => item.Date.HasValue)
+            .Take(2)
+            .ToArray();
+        var explicitDate = dates.FirstOrDefault().Date;
 
         if (awaitingReturn)
         {
@@ -369,27 +379,36 @@ public static class AiEndpoints
                 ? localServiceTime
                 : TimeZoneInfo.ConvertTime(outbound.Value, viewerTimeZone);
             var returnDate = explicitDate ?? DateOnly.FromDateTime(outboundLocal.DateTime);
-            if (explicitDate is null && parsedTimes[0] <= TimeOnly.FromDateTime(outboundLocal.DateTime))
+            if (explicitDate is null && parsedTimes[0].Time <= TimeOnly.FromDateTime(outboundLocal.DateTime))
                 returnDate = returnDate.AddDays(1);
-            var followUpReturnTime = LocalInstant(returnDate, parsedTimes[0], viewerTimeZone);
-            return followUpReturnTime is null ? null : new(true, outbound, followUpReturnTime);
+            var followUpReturnTime = LocalInstant(returnDate, parsedTimes[0].Time, viewerTimeZone, "return", out var returnWarning);
+            return new(true, outbound, followUpReturnTime, returnWarning);
         }
 
-        var outboundDate = explicitDate ?? DateOnly.FromDateTime(localServiceTime.DateTime);
-        if (explicitDate is null && parsedTimes[0] < TimeOnly.FromDateTime(localServiceTime.DateTime))
+        var outboundClock = parsedTimes[0].Time;
+        var explicitReturnDate = dates.Length > 1 ? dates[1].Date : null;
+        if (dates.Length == 1 && parsedTimes.Length > 1 &&
+            ReturnCuePattern.Match(request.Message, parsedTimes[0].Index) is { Success: true } returnCue &&
+            returnCue.Index <= parsedTimes[1].Index && returnCue.Index < dates[0].Index)
+        {
+            explicitReturnDate = explicitDate;
+            explicitDate = null;
+        }
+
+        var outboundDate = explicitDate ?? serviceDate;
+        if (explicitDate is null && outboundClock < TimeOnly.FromDateTime(localServiceTime.DateTime))
             outboundDate = outboundDate.AddDays(1);
-        var outboundTime = LocalInstant(outboundDate, parsedTimes[0], viewerTimeZone);
-        if (outboundTime is null) return null;
+        var outboundTime = LocalInstant(outboundDate, outboundClock, viewerTimeZone, "outbound", out var warning);
+        if (outboundTime is null) return new(true, null, null, warning);
 
         DateTimeOffset? returnTime = null;
         if (parsedTimes.Length > 1)
         {
-            var returnDate = outboundDate;
-            if (parsedTimes[1] <= parsedTimes[0]) returnDate = returnDate.AddDays(1);
-            returnTime = LocalInstant(returnDate, parsedTimes[1], viewerTimeZone);
-            if (returnTime is null) return null;
+            var returnClock = parsedTimes[1].Time;
+            var returnDate = explicitReturnDate ?? (returnClock <= outboundClock ? outboundDate.AddDays(1) : outboundDate);
+            returnTime = LocalInstant(returnDate, returnClock, viewerTimeZone, "return", out warning);
         }
-        return new(true, outboundTime, returnTime);
+        return new(true, outboundTime, returnTime, warning);
     }
 
     private static TimeOnly? ParseTime(Match match)
@@ -411,29 +430,30 @@ public static class AiEndpoints
             ? new TimeOnly(hour, minute)
             : null;
 
-    private static DateTimeOffset? LocalInstant(DateOnly date, TimeOnly time, TimeZoneInfo viewerTimeZone)
+    private static DateTimeOffset? LocalInstant(
+        DateOnly date, TimeOnly time, TimeZoneInfo viewerTimeZone, string leg, out string? warning)
     {
         var local = DateTime.SpecifyKind(date.ToDateTime(time), DateTimeKind.Unspecified);
-        if (viewerTimeZone.IsInvalidTime(local) || viewerTimeZone.IsAmbiguousTime(local)) return null;
-        return new DateTimeOffset(local, viewerTimeZone.GetUtcOffset(local));
+        warning = viewerTimeZone.IsInvalidTime(local)
+            ? $"The clock skips that {leg} time. What time would you prefer?"
+            : viewerTimeZone.IsAmbiguousTime(local)
+                ? $"That {leg} time repeats when the clocks change. What time would you prefer?"
+                : null;
+        return warning is null ? new DateTimeOffset(local, viewerTimeZone.GetUtcOffset(local)) : null;
     }
 
-    private static DateOnly? ExplicitDate(string message, DateOnly serviceDate)
+    private static DateOnly? ExplicitDate(string text, DateOnly serviceDate)
     {
-        if (IsoDatePattern.Match(message) is { Success: true } iso &&
-            DateOnly.TryParseExact(iso.Groups["date"].Value, "yyyy-MM-dd", CultureInfo.InvariantCulture,
+        if (DateOnly.TryParseExact(text, "yyyy-MM-dd", CultureInfo.InvariantCulture,
                 DateTimeStyles.None, out var isoDate))
             return isoDate;
 
-        if (NamedDatePattern.Match(message) is not { Success: true } named) return null;
-        var text = named.Groups["date"].Value;
-        if (text.Any(char.IsDigit) && Regex.IsMatch(text, @"\b\d{4}\b", RegexOptions.CultureInvariant) &&
-            DateOnly.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces, out var dated))
-            return dated;
-        if (!DateTime.TryParseExact(text, ["MMMM d", "MMM d"], CultureInfo.InvariantCulture,
-                DateTimeStyles.AllowWhiteSpaces, out var withoutYear))
+        if (text.Contains(','))
+            return DateOnly.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces, out var dated)
+                ? dated : null;
+        if (!DateOnly.TryParseExact($"{text} {serviceDate.Year}", ["MMMM d yyyy", "MMM d yyyy"], CultureInfo.InvariantCulture,
+                DateTimeStyles.AllowWhiteSpaces, out var candidate))
             return null;
-        var candidate = new DateOnly(serviceDate.Year, withoutYear.Month, withoutYear.Day);
         return candidate < serviceDate ? candidate.AddYears(1) : candidate;
     }
 
@@ -514,5 +534,6 @@ public static class AiEndpoints
 
     private sealed record SpeechRequest(string Text);
     internal sealed class RequestValidationException(string message) : Exception(message);
-    internal sealed record PassengerTripTiming(bool RoundTrip, DateTimeOffset? OutboundTime, DateTimeOffset? ReturnTime);
+    internal sealed record PassengerTripTiming(
+        bool RoundTrip, DateTimeOffset? OutboundTime, DateTimeOffset? ReturnTime, string? Clarification);
 }
