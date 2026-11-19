@@ -52,10 +52,10 @@ URL before starting the AppHost. Use a URL without credentials, a query, or
 a fragment. The `attendee-site` resource then links to **Attendee site (Dev Tunnel)**.
 This only adds a dashboard link; it doesn't create a tunnel or change access.
 
-The AppHost tags all three sites `interactive`. The other tags are `simulation`,
-`fleet`, `services`, `ai`, `infrastructure`, and `config`. Tags are experimental
-metadata in Aspire 17.0.0; the Resources view doesn't have a tag filter in that
-version.
+In the redesigned dashboard, choose **Group resources** > **Tags** to group
+resources by role, or use **Filters** to show only `interactive` (the three
+site links). The other tags are `simulation`, `fleet`, `services`, `ai`,
+`infrastructure`, and `config`.
 
 Use the dashboard to follow a request across the graph or run
 **Check passenger inventory** on `analytics` and **Inspect Airport arrivals**
