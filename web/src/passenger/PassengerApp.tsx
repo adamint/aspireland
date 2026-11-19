@@ -6,7 +6,7 @@ import { NetworkMap } from "../components/NetworkMap";
 import { PassengerCapacity } from "../components/PassengerCapacity";
 import { StationBoardView } from "../components/StationBoardView";
 import { TransitBrand } from "../components/TransitBrand";
-import { formatPassengerDateTime, formatDateTimeLocal, formatDuration, lineFor, parseSimulatedLocalInput, stationName, titleCase, viewerTimeZone } from "../format";
+import { formatPassengerDateTime, formatDateTimeLocal, formatDuration, formatLocalTime, lineFor, parseSimulatedLocalInput, stationName, titleCase, viewerTimeZone } from "../format";
 import { useCapabilities, useStationBoard, useWorld } from "../hooks";
 import { activeStationIncidents, lineIncidents, publicAlert, publicTrainStatus } from "../passengerData";
 import interLicense from "../inter-OFL.txt?url";
@@ -97,7 +97,10 @@ function ServiceAlerts({ snapshot, stale = false }: { snapshot?: WorldSnapshot; 
           <p>
             {!snapshot ? "Checking service alerts…" : stale ? <>
               <strong>Live service alerts unavailable</strong>
-              <span>Service updates are delayed. Last updated {formatPassengerDateTime(snapshot.world.updatedAt)}. Check again before travelling.</span>
+              <span>Service updates are delayed. Last updated {formatLocalTime(snapshot.world.updatedAt, {
+                date: "if-different",
+                relativeTo: snapshot.world.simTime,
+              })}. Check again before travelling.</span>
             </> : "No service alerts reported"}
           </p>
         )}
@@ -111,7 +114,10 @@ function ServiceStatus({ world, network, stale }: { world: WorldState; network: 
     <section className="public-section status-section" id="status">
       <div className="section-heading">
         <div><span className="eyebrow">{stale ? "Last report" : "Right now"}</span><h2>Service status</h2></div>
-        <span className="updated-label">Last updated {formatPassengerDateTime(world.updatedAt)}</span>
+        <span className="updated-label">Last updated {formatLocalTime(world.updatedAt, {
+          date: "if-different",
+          relativeTo: world.simTime,
+        })}</span>
       </div>
       <div className="line-status-grid">
         {network.lines.map((line) => {
@@ -267,7 +273,10 @@ function AccessibilityPanel({ world, network, stale }: { world: WorldState; netw
         <span className="eyebrow">Step-free travel</span>
         <h2>Elevator and station access</h2>
         <p>Choose “Step-free trip” to avoid stairs.</p>
-        <small>Last updated {formatPassengerDateTime(world.updatedAt)}</small>
+        <small>Last updated {formatLocalTime(world.updatedAt, {
+          date: "if-different",
+          relativeTo: world.simTime,
+        })}</small>
       </div>
       <div className="accessibility-updates">
         {stale && <div className="notice notice--warning"><strong>Access status unavailable</strong><p>Updates are delayed. Check again before travelling.</p></div>}
@@ -448,7 +457,7 @@ function StationPage({
             {servingLines.map((line) => <span key={line.id} className={`line-pill line-pill--${line.id.toLowerCase()}`}>{line.name}</span>)}
           </div>
         </div>
-        <div className="station-page-updated"><span>Travel date and time</span><strong><time dateTime={world.simTime}>{formatPassengerDateTime(world.simTime)}</time></strong><small>Last updated <time dateTime={world.updatedAt}>{formatPassengerDateTime(world.updatedAt)}</time></small></div>
+        <div className="station-page-updated"><span>Travel date and time</span><strong><time dateTime={world.simTime}>{formatPassengerDateTime(world.simTime)}</time></strong><small>Last updated <time dateTime={world.updatedAt}>{formatLocalTime(world.updatedAt, { date: "if-different", relativeTo: world.simTime })}</time></small></div>
       </section>
       {stationIncidents.length > 0 && (
         <section className="station-alert-banner">
@@ -544,7 +553,10 @@ export function PassengerApp() {
       <PassengerHeader onNavigate={navigate} simulatedTime={world.simTime} stale={stale} showClock={Boolean(stationMatch)} />
       {stale && stationMatch && (
         <div className="public-data-warning">
-          Service updates are delayed. Last updated {formatPassengerDateTime(world.updatedAt)}. Check again before travelling.
+          Service updates are delayed. Last updated {formatLocalTime(world.updatedAt, {
+            date: "if-different",
+            relativeTo: world.simTime,
+          })}. Check again before travelling.
         </div>
       )}
       {stationMatch ? (

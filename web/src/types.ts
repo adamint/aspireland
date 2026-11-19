@@ -307,10 +307,15 @@ export interface ChatMessage {
   content: string;
 }
 
+export interface AssistantJourneyContext extends JourneyRequest {
+  savedOutboundId?: string | null;
+  awaitingReturnTime?: boolean;
+}
+
 export interface AssistantRequest {
   message: string;
   history?: ChatMessage[] | null;
-  journeyContext?: JourneyRequest | null;
+  journeyContext?: AssistantJourneyContext | null;
   viewerTimeZone?: string | null;
 }
 
@@ -320,7 +325,7 @@ export interface AssistantResponse {
   comparison?: ComparisonResult | null;
   proposal?: ActionProposal | null;
   tools?: string[] | null;
-  journeyContext?: JourneyRequest | null;
+  journeyContext?: AssistantJourneyContext | null;
   arrivals?: StationBoard | null;
 }
 

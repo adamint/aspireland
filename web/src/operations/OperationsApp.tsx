@@ -5,7 +5,7 @@ import { AssistantPanel } from "../components/AssistantPanel";
 import { NetworkMap } from "../components/NetworkMap";
 import { StationBoardView } from "../components/StationBoardView";
 import { TransitBrand } from "../components/TransitBrand";
-import { formatClock, formatDuration, formatSimTimestamp, formatWallTimestamp, stationName, titleCase } from "../format";
+import { formatClock, formatDuration, formatLocalTime, formatWallTimestamp, stationName, titleCase } from "../format";
 import { useCapabilities, useStationBoard, useWorld } from "../hooks";
 import { activeStationIncidents } from "../passengerData";
 import { DispatchDesk } from "./DispatchDesk";
@@ -320,7 +320,7 @@ function StationDetail({
             <div className="history-list">
               {stationHistory.map((event) => (
                 <article key={event.id}>
-                  <time>{formatSimTimestamp(event.simTime)}</time>
+                  <time>{formatLocalTime(event.simTime, { date: "if-different", relativeTo: world.simTime })}</time>
                   <div><strong>{titleCase(event.kind)}</strong><p>{event.description}</p></div>
                   <span>{event.source}</span>
                 </article>
@@ -436,7 +436,7 @@ export function OperationsApp() {
         <header><h2>Recent audit history</h2><span>Latest {Math.min(12, world.history.length)} recorded events</span></header>
         <div className="history-list">
           {world.history.slice(-12).reverse().map((event) => <article key={event.id}>
-            <time>{formatSimTimestamp(event.simTime)}</time><div><strong>{titleCase(event.kind)}</strong><p>{event.description}</p></div><span>{event.source}</span>
+            <time>{formatLocalTime(event.simTime, { date: "if-different", relativeTo: world.simTime })}</time><div><strong>{titleCase(event.kind)}</strong><p>{event.description}</p></div><span>{event.source}</span>
           </article>)}
           {!world.history.length && <div className="empty-state">No events have been recorded in this scenario yet. Applied actions and service events appear here.</div>}
         </div>

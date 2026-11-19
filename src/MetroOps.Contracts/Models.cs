@@ -213,11 +213,13 @@ public sealed record Flight(string Id, string Direction, DateTimeOffset Schedule
 public sealed record DemandResponse(List<DemandBatch> Cohorts, List<Flight> Flights);
 public sealed record ForecastSample(long Seed, List<DemandBatch> Demand, List<Flight> Flights);
 public sealed record ChatMessage(string Role, string Content);
-public sealed record AssistantRequest(string Message, List<ChatMessage>? History = null, JourneyRequest? JourneyContext = null,
+public sealed record AssistantJourneyContext(string Origin, string Destination, bool Accessible = false,
+    DateTimeOffset? DepartureTime = null, string? SavedOutboundId = null, bool AwaitingReturnTime = false);
+public sealed record AssistantRequest(string Message, List<ChatMessage>? History = null, AssistantJourneyContext? JourneyContext = null,
     string? ViewerTimeZone = null);
 public sealed record ActionProposal(string Id, ServiceAction Action, string ScenarioId, int Generation,
     long Version, string Explanation, string Status = "proposed");
 public sealed record AssistantResponse(string Text, JourneyResult? Journey = null, ComparisonResult? Comparison = null,
-    ActionProposal? Proposal = null, List<string>? Tools = null, JourneyRequest? JourneyContext = null,
+    ActionProposal? Proposal = null, List<string>? Tools = null, AssistantJourneyContext? JourneyContext = null,
     StationBoard? Arrivals = null);
 public sealed record AiCapabilities(bool Text, bool Transcription, bool Speech, string Provider, string? Reason);

@@ -2,16 +2,18 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using System.Globalization;
+using System.Collections.Concurrent;
 using MetroOps.Contracts;
 
 namespace MetroOps.AiHost;
 
 internal sealed record AssistantToolDefinition(string Name, string Description, JsonElement Parameters);
 
-internal sealed class AssistantCapture(JourneyRequest? journeyContext, TimeZoneInfo? viewerTimeZone = null)
+internal sealed class AssistantCapture
 {
     private readonly List<JourneyResult> _passengerJourneys = [];
     private bool _askReturnTime;
+    public AiEndpoints.PassengerTripTiming? TripTiming { get; }
 
     public JourneyResult? Journey { get; set; }
     public ComparisonResult? Comparison { get; set; }
@@ -19,9 +21,27 @@ internal sealed class AssistantCapture(JourneyRequest? journeyContext, TimeZoneI
     public StationBoard? Arrivals { get; set; }
     public string? StationDiagnosisText { get; set; }
     public string? Clarification { get; set; }
-    public JourneyRequest? JourneyContext { get; set; } = journeyContext;
+    public AssistantJourneyContext? JourneyContext { get; set; }
     public List<string> Tools { get; } = [];
-    public TimeZoneInfo ViewerTimeZone { get; } = viewerTimeZone ?? TimeZoneInfo.Utc;
+    public TimeZoneInfo ViewerTimeZone { get; }
+    public bool HasSavedOutbound => _passengerJourneys.Count > 0 && JourneyContext?.AwaitingReturnTime == true;
+
+    public AssistantCapture(
+        AssistantJourneyContext? journeyContext,
+        TimeZoneInfo? viewerTimeZone = null,
+        AiEndpoints.PassengerTripTiming? tripTiming = null)
+    {
+        JourneyContext = journeyContext;
+        ViewerTimeZone = viewerTimeZone ?? TimeZoneInfo.Utc;
+        TripTiming = tripTiming;
+        if (journeyContext is { SavedOutboundId: { } savedId } &&
+            PassengerJourneyStore.TryGet(savedId, out var saved) &&
+            saved.Request.Origin == journeyContext.Origin &&
+            saved.Request.Destination == journeyContext.Destination)
+        {
+            _passengerJourneys.Add(saved);
+        }
+    }
 
     public string LocalTime(DateTimeOffset time) =>
         TimeZoneInfo.ConvertTime(time, ViewerTimeZone).ToString("yyyy-MM-dd HH:mm:ss zzz", CultureInfo.InvariantCulture);
@@ -33,6 +53,18 @@ internal sealed class AssistantCapture(JourneyRequest? journeyContext, TimeZoneI
         if (index >= 0) _passengerJourneys[index] = journey;
         else if (_passengerJourneys.Count < 2) _passengerJourneys.Add(journey);
         _askReturnTime |= askReturnTime;
+    }
+
+    public void SaveJourneyContext(JourneyResult journey, bool awaitingReturnTime)
+    {
+        var savedOutboundId = awaitingReturnTime ? PassengerJourneyStore.Add(journey) : JourneyContext?.SavedOutboundId;
+        JourneyContext = new(
+            journey.Request.Origin,
+            journey.Request.Destination,
+            journey.Request.Accessible,
+            journey.Request.DepartureTime,
+            savedOutboundId,
+            awaitingReturnTime);
     }
 
     public AssistantResponse BuildResponse(string text, bool passenger = true)
@@ -52,7 +84,9 @@ internal sealed class AssistantCapture(JourneyRequest? journeyContext, TimeZoneI
         if (Journey is not null && Comparison is null && Proposal is null)
         {
             text = passenger && _passengerJourneys.Count > 0
-                ? string.Join("\n\n", _passengerJourneys.Select(journey => DescribeJourney(journey, passenger: true)))
+                ? string.Join("\n\n", _passengerJourneys.Select((journey, index) =>
+                    DescribeJourney(journey, passenger: true,
+                        _passengerJourneys.Count > 1 || _askReturnTime ? index == 0 ? "Outbound" : "Return" : null)))
                 : DescribeJourney(Journey, passenger);
             if (passenger && _askReturnTime && _passengerJourneys.Count == 1)
                 text += "\n\nWhat time would you like to head back?";
@@ -60,17 +94,26 @@ internal sealed class AssistantCapture(JourneyRequest? journeyContext, TimeZoneI
         return new AssistantResponse(text, Journey, Comparison, Proposal, Tools.Count > 0 ? Tools : null, JourneyContext, Arrivals);
     }
 
-    private string DescribeJourney(JourneyResult journey, bool passenger)
+    private string DescribeJourney(JourneyResult journey, bool passenger, string? label = null)
     {
         if (journey.Options.FirstOrDefault() is not { } itinerary)
             return journey.Error ?? "No journey is currently available between those stations.";
-        var arrival = TimeZoneInfo.ConvertTime(itinerary.ArrivesAt, ViewerTimeZone)
-            .ToString("h:mm tt", CultureInfo.InvariantCulture);
+        var departure = journey.Request.DepartureTime ?? journey.AsOf;
+        var localDeparture = TimeZoneInfo.ConvertTime(departure, ViewerTimeZone);
+        var localArrival = TimeZoneInfo.ConvertTime(itinerary.ArrivesAt, ViewerTimeZone);
+        var arrival = LocalPassengerTime(localArrival, localDeparture);
         var route = journey.Request.Accessible ? "step-free route" : "route";
         var duration = passenger ? TripMinutes(itinerary.TotalSeconds) : $"{Math.Ceiling(itinerary.TotalSeconds / 60)} minutes";
         var summary = $"The {route} from {Network.Station(journey.Request.Origin).Name} to {Network.Station(journey.Request.Destination).Name} " +
             $"takes about {duration}, arriving at {arrival}";
-        if (passenger) return PassengerJourney(itinerary, $"{summary} ({ViewerTimeZone.Id}).");
+        if (passenger)
+        {
+            var heading = label is null ? "" : $"**{label}**\n";
+            var readinessLabel = journey.Request.Accessible ? "Ready for a step-free trip from" : "Ready to leave";
+            var readiness = $"- {readinessLabel} {Network.Station(journey.Request.Origin).Name}: {LocalPassengerTime(localDeparture, localDeparture)}.";
+            var arrivalLine = $"- Approx. arrival at {Network.Station(journey.Request.Destination).Name}: {arrival} ({duration}).";
+            return PassengerJourney(itinerary, $"{heading}{readiness}\n{arrivalLine}");
+        }
         var warning = itinerary.Warnings.Count > 0 ? " Check the estimate warnings on the card." : "";
         return $"{summary} ({ViewerTimeZone.Id}, simulated). The route card includes boarding waits and transfers.{warning}";
     }
@@ -95,11 +138,14 @@ internal sealed class AssistantCapture(JourneyRequest? journeyContext, TimeZoneI
 
     private static string PassengerJourney(Itinerary itinerary, string summary)
     {
-        var rides = itinerary.Legs.Where(leg => leg is { Kind: "ride", Line: not null }).Select(leg =>
+        var rides = itinerary.Legs.Where(leg => leg is { Kind: "ride", Line: not null }).Select((leg, index) =>
         {
             var direction = leg.Destination is null ? "" : $" toward {Network.Station(leg.Destination).Name}";
             var wait = leg.WaitSeconds > 0 ? $" (wait about {TripMinutes(leg.WaitSeconds)})" : "";
-            return $"- At {Network.Station(leg.From).Name}, take {Network.Line(leg.Line!).Name}{direction} to {Network.Station(leg.To).Name}{wait}.";
+            var action = index == 0
+                ? $"At {Network.Station(leg.From).Name}, take"
+                : $"Transfer at {Network.Station(leg.From).Name} to";
+            return $"- {action} {Network.Line(leg.Line!).Name}{direction} to {Network.Station(leg.To).Name}{wait}.";
         });
         var details = rides.Concat(itinerary.Warnings.Distinct().Select(warning => $"- {warning}")).ToArray();
         return details.Length == 0 ? summary : $"{summary}\n\n{string.Join('\n', details)}";
@@ -109,6 +155,40 @@ internal sealed class AssistantCapture(JourneyRequest? journeyContext, TimeZoneI
     {
         var minutes = Math.Ceiling(seconds / 60);
         return minutes == 1 ? "1 minute" : $"{minutes} minutes";
+    }
+
+    private static string LocalPassengerTime(DateTimeOffset value, DateTimeOffset reference)
+    {
+        var format = value.Date == reference.Date ? "h:mm tt" : "ddd, MMM d 'at' h:mm tt";
+        return value.ToString(format, CultureInfo.InvariantCulture);
+    }
+}
+
+internal static class PassengerJourneyStore
+{
+    private static readonly ConcurrentDictionary<string, (JourneyResult Journey, DateTimeOffset ExpiresAt)> Journeys = new();
+
+    public static string Add(JourneyResult journey)
+    {
+        var now = DateTimeOffset.UtcNow;
+        foreach (var expired in Journeys.Where(entry => entry.Value.ExpiresAt <= now))
+            Journeys.TryRemove(expired.Key, out _);
+        var id = Guid.NewGuid().ToString("N");
+        Journeys[id] = (journey, now.AddMinutes(30));
+        return id;
+    }
+
+    public static bool TryGet(string id, out JourneyResult journey)
+    {
+        journey = null!;
+        if (!Journeys.TryGetValue(id, out var saved)) return false;
+        if (saved.ExpiresAt <= DateTimeOffset.UtcNow)
+        {
+            Journeys.TryRemove(id, out _);
+            return false;
+        }
+        journey = saved.Journey;
+        return true;
     }
 }
 
@@ -211,8 +291,15 @@ internal abstract class AssistantToolRegistry
             {
                 var suppliedOrigin = OptionalString(arguments, "origin");
                 var suppliedDestination = OptionalString(arguments, "destination");
-                var originText = suppliedOrigin ?? capture.JourneyContext?.Origin;
-                var destinationText = suppliedDestination ?? capture.JourneyContext?.Destination;
+                var returning = IsPassenger &&
+                    capture.JourneyContext?.AwaitingReturnTime == true &&
+                    capture.TripTiming?.ReturnTime is not null;
+                var originText = returning
+                    ? capture.JourneyContext!.Destination
+                    : suppliedOrigin ?? capture.JourneyContext?.Origin;
+                var destinationText = returning
+                    ? capture.JourneyContext!.Origin
+                    : suppliedDestination ?? capture.JourneyContext?.Destination;
                 if (string.IsNullOrWhiteSpace(originText) || string.IsNullOrWhiteSpace(destinationText))
                 {
                     return SerializeError("Origin and destination are required. Resolve ambiguous station names before planning.");
@@ -231,10 +318,22 @@ internal abstract class AssistantToolRegistry
                     });
                 }
 
-                var askReturnTime = IsPassenger && OptionalBool(arguments, "askReturnTime") == true;
+                var askReturnTime = IsPassenger &&
+                    (OptionalBool(arguments, "askReturnTime") == true ||
+                     capture.TripTiming is { RoundTrip: true, ReturnTime: null });
+                var pairedReturnTime = capture.TripTiming?.ReturnTime ??
+                    OptionalOffsetDateTime(arguments, "returnTime", capture.ViewerTimeZone);
                 var context = IsPassenger && suppliedOrigin is not null && suppliedDestination is not null
-                    ? null : capture.JourneyContext;
-                var request = BuildJourneyRequest(arguments, context, origin.Station.Id, destination.Station.Id);
+                    ? null : capture.JourneyContext is null ? null : new JourneyRequest(
+                        capture.JourneyContext.Origin,
+                        capture.JourneyContext.Destination,
+                        capture.JourneyContext.Accessible,
+                        capture.JourneyContext.DepartureTime);
+                var authoritativeDeparture = returning
+                    ? capture.TripTiming?.ReturnTime
+                    : capture.TripTiming?.OutboundTime;
+                var request = BuildJourneyRequest(arguments, context, origin.Station.Id, destination.Station.Id,
+                    capture.ViewerTimeZone, authoritativeDeparture);
                 var journey = await Services.PostAsync<JourneyRequest, JourneyResult>(
                     "planner",
                     "journeys",
@@ -242,8 +341,43 @@ internal abstract class AssistantToolRegistry
                     "Journey planner",
                     cancellationToken);
                 capture.Journey = journey;
-                capture.JourneyContext = journey.Request;
-                if (IsPassenger) capture.RecordPassengerJourney(journey, askReturnTime);
+                if (IsPassenger)
+                {
+                    capture.RecordPassengerJourney(journey, askReturnTime);
+                    if (!returning && pairedReturnTime is { } returnTime)
+                    {
+                        var returnRequest = new JourneyRequest(
+                            journey.Request.Destination,
+                            journey.Request.Origin,
+                            journey.Request.Accessible,
+                            returnTime);
+                        var returnJourney = await Services.PostAsync<JourneyRequest, JourneyResult>(
+                            "planner",
+                            "journeys",
+                            returnRequest,
+                            "Journey planner",
+                            cancellationToken);
+                        capture.Journey = returnJourney;
+                        capture.RecordPassengerJourney(returnJourney, askReturnTime: false);
+                        capture.SaveJourneyContext(journey, awaitingReturnTime: false);
+                        return Serialize(new
+                        {
+                            journeys = new[] { journey, returnJourney },
+                            viewerTimeZone = capture.ViewerTimeZone.Id,
+                            localDepartures = new[]
+                            {
+                                capture.LocalTime(journey.Request.DepartureTime ?? journey.AsOf),
+                                capture.LocalTime(returnJourney.Request.DepartureTime ?? returnJourney.AsOf)
+                            }
+                        });
+                    }
+                    capture.SaveJourneyContext(
+                        returning && capture.JourneyContext?.SavedOutboundId is not null &&
+                        PassengerJourneyStore.TryGet(capture.JourneyContext.SavedOutboundId, out var outbound)
+                            ? outbound
+                            : journey,
+                        awaitingReturnTime: !returning && askReturnTime);
+                }
                 return Serialize(new
                 {
                     journey,
@@ -333,18 +467,16 @@ internal abstract class AssistantToolRegistry
         JsonElement arguments,
         JourneyRequest? context,
         string origin,
-        string destination)
+        string destination,
+        TimeZoneInfo viewerTimeZone,
+        DateTimeOffset? authoritativeDeparture = null)
     {
         var accessible = OptionalBool(arguments, "accessible") ?? context?.Accessible ?? false;
-        DateTimeOffset? departureTime = context?.DepartureTime;
+        DateTimeOffset? departureTime = authoritativeDeparture ?? context?.DepartureTime;
         var departureText = OptionalString(arguments, "departureTime");
-        if (departureText is not null)
+        if (authoritativeDeparture is null && departureText is not null)
         {
-            if (!DateTimeOffset.TryParse(departureText, out var parsed))
-            {
-                throw new ToolInputException("departureTime must be an ISO 8601 timestamp.");
-            }
-            departureTime = parsed;
+            departureTime = ParseOffsetDateTime(departureText, "departureTime", viewerTimeZone);
         }
 
         return new JourneyRequest(origin, destination, accessible, departureTime);
@@ -454,6 +586,31 @@ internal abstract class AssistantToolRegistry
             throw new ToolInputException($"{name} must be a boolean.");
         }
         return property.GetBoolean();
+    }
+
+    private static DateTimeOffset? OptionalOffsetDateTime(
+        JsonElement arguments,
+        string name,
+        TimeZoneInfo viewerTimeZone)
+    {
+        var value = OptionalString(arguments, name);
+        return value is null ? null : ParseOffsetDateTime(value, name, viewerTimeZone);
+    }
+
+    private static DateTimeOffset ParseOffsetDateTime(string value, string name, TimeZoneInfo viewerTimeZone)
+    {
+        if (!(value.EndsWith('Z') ||
+              value.Length >= 6 && (value[^6] == '+' || value[^6] == '-') && value[^3] == ':') ||
+            !DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
+        {
+            throw new ToolInputException($"{name} must be an ISO 8601 timestamp with an explicit offset.");
+        }
+        var expectedOffset = viewerTimeZone.GetUtcOffset(parsed.UtcDateTime);
+        if (parsed.Offset != expectedOffset)
+        {
+            throw new ToolInputException($"{name} offset must match the viewer time zone for that date.");
+        }
+        return parsed;
     }
 
     protected static string Serialize(object value) => JsonSerializer.Serialize(value, Wire.Json);
@@ -567,9 +724,9 @@ internal static class ToolDefinitions
         """);
     private static readonly AssistantToolDefinition PlanPassengerJourney = Define(
         "plan_journey",
-        "Plan a real journey. Pass supplied station names as written; this tool resolves them. A new trip with both stations and no departure time leaves now. Omit a station only when reusing the prior journey context.",
+        "Plan a real journey. Pass supplied station names as written; this tool resolves them. A new trip with both stations and no departure time leaves now. For a round trip with both times, include returnTime in this single call. Omit a station only when reusing the prior journey context.",
         """
-        {"type":"object","properties":{"origin":{"type":"string"},"destination":{"type":"string"},"accessible":{"type":"boolean"},"departureTime":{"type":"string","description":"ISO 8601 simulated departure time"},"askReturnTime":{"type":"boolean","description":"True for the outbound leg of a round trip when the rider has not given a return time."}},"additionalProperties":false}
+        {"type":"object","properties":{"origin":{"type":"string"},"destination":{"type":"string"},"accessible":{"type":"boolean"},"departureTime":{"type":"string","description":"ISO 8601 simulated departure time with the viewer-zone offset"},"returnTime":{"type":"string","description":"ISO 8601 return departure time with the viewer-zone offset, when supplied by the rider"},"askReturnTime":{"type":"boolean","description":"True for the outbound leg of a round trip when the rider has not given a return time."}},"additionalProperties":false}
         """);
     private static readonly AssistantToolDefinition CompareIntervention = Define(
         "compare_intervention",

@@ -4,9 +4,9 @@ import { stationName, titleCase, viewerTimeZone } from "../format";
 import type {
   ActionProposal,
   AiCapabilities,
+  AssistantJourneyContext,
   AssistantResponse,
   ChatMessage,
-  JourneyRequest,
   NetworkDefinition,
 } from "../types";
 import { ComparisonCard } from "./ComparisonCard";
@@ -61,7 +61,7 @@ export function AssistantPanel({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [approvalState, setApprovalState] = useState<Record<string, string>>({});
-  const journeyContext = useRef<JourneyRequest | null>(null);
+  const journeyContext = useRef<AssistantJourneyContext | null>(null);
   const conversation = useRef<HTMLDivElement | null>(null);
   const hasConversationUpdate = useRef(false);
   const passenger = kind === "passenger";

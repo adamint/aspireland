@@ -56,8 +56,8 @@ it("shows rider journey updates and arrivals in the browser's local day and time
     asOf: "2026-11-18T00:59:00Z",
     options: [{ ...journey.options[0], arrivesAt: "2026-11-18T01:29:00Z" }],
   }} />);
-  expect(screen.getByText("Updated Tuesday, November 17 at 4:59 PM")).toBeTruthy();
-  expect(screen.getByText("Arrive Tuesday, November 17 at 5:29 PM")).toBeTruthy();
+  expect(screen.getByText("Updated Tue, Nov 17, 4:59 PM")).toBeTruthy();
+  expect(screen.getByText("Arrive 5:29 PM")).toBeTruthy();
   expect(screen.queryByText(/GMT|Europe\/|America\//)).toBeNull();
 });
 

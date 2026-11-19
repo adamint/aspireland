@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { formatSimTimestamp, formatWallTimestamp, stationName, titleCase } from "../format";
+import { formatLocalTime, formatWallTimestamp, stationName, titleCase } from "../format";
 import type { NetworkDefinition, ServiceAction, WorldState } from "../types";
 import { ActionWorkbench, targetDescription } from "./ActionWorkbench";
 
@@ -73,7 +73,10 @@ export function DispatchDesk({ world, network, stale, error, refresh, onInspectS
               <div><dt>Service</dt><dd>{lines.map((line) => line.name).join(", ") || (selectedTrain?.state === "reserve" ? "Unassigned reserve" : "No line directly identified")}</dd></div>
               {station && <div><dt>Station</dt><dd>{station.name}</dd></div>}
               {selectedTrain && <div><dt>Train</dt><dd>{selectedTrain.id}: {titleCase(selectedTrain.state)} ({selectedTrain.load}/{selectedTrain.capacity} aboard)</dd></div>}
-              {selectedIncident && <div><dt>Since</dt><dd>{formatSimTimestamp(selectedIncident.startedAt)}</dd></div>}
+              {selectedIncident && <div><dt>Since</dt><dd>{formatLocalTime(selectedIncident.startedAt, {
+                date: "if-different",
+                relativeTo: world.simTime,
+              })}</dd></div>}
               {selectedTrain?.state === "reserve" && <div><dt>Compatible lines</dt><dd>{selectedTrain.compatibleLines.join(", ")}</dd></div>}
             </dl>
             <div className="context-links">

@@ -4,37 +4,49 @@ export function viewerTimeZone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone;
 }
 
-export function formatSimTimestamp(value: string, timeZone = viewerTimeZone()): string {
-  return new Intl.DateTimeFormat("en-US", {
-    weekday: "short",
+export interface LocalTimeFormatOptions {
+  timeZone?: string;
+  locale?: string;
+  date?: "never" | "always" | "if-different";
+  relativeTo?: string;
+  timeZoneName?: "short";
+}
+
+function localDateKey(value: string, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone,
+  }).format(new Date(value));
+}
+
+export function formatLocalTime(value: string, options: LocalTimeFormatOptions = {}): string {
+  const timeZone = options.timeZone ?? viewerTimeZone();
+  const includeDate = options.date === "always" ||
+    (options.date === "if-different" && options.relativeTo !== undefined &&
+      localDateKey(value, timeZone) !== localDateKey(options.relativeTo, timeZone));
+  return new Intl.DateTimeFormat(options.locale, {
+    ...(includeDate ? { weekday: "short", month: "short", day: "numeric" } : {}),
     hour: "numeric",
     minute: "2-digit",
     timeZone,
-    timeZoneName: "short",
+    timeZoneName: options.timeZoneName,
   }).format(new Date(value));
+}
+
+export function formatSimTimestamp(value: string, timeZone = viewerTimeZone()): string {
+  return formatLocalTime(value, { timeZone, date: "always" });
 }
 
 export const formatClock = formatSimTimestamp;
 
 export function formatPassengerDateTime(value: string, timeZone = viewerTimeZone(), locale?: string): string {
-  return new Intl.DateTimeFormat(locale, {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    timeZone,
-  }).format(new Date(value));
+  return formatLocalTime(value, { timeZone, locale, date: "always" });
 }
 
 export function formatWallTimestamp(value: string): string {
-  return new Intl.DateTimeFormat("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    second: "2-digit",
-    timeZone: viewerTimeZone(),
-    timeZoneName: "short",
-  }).format(new Date(value));
+  return formatLocalTime(value);
 }
 
 function localParts(value: Date, timeZone: string): Record<string, string> {

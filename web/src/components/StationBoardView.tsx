@@ -1,4 +1,4 @@
-import { formatEta, formatPassengerDateTime, formatSimTimestamp, formatWallTimestamp, publicPlatformLabel, stationName, titleCase } from "../format";
+import { formatEta, formatLocalTime, formatSimTimestamp, formatWallTimestamp, publicPlatformLabel, stationName, titleCase } from "../format";
 import type { NetworkDefinition, StationBoard } from "../types";
 import { PassengerCapacity } from "./PassengerCapacity";
 
@@ -43,9 +43,13 @@ export function StationBoardView({
     <div className={`arrival-board ${compact ? "arrival-board--compact" : ""}`}>
       <div className="arrival-board-status">
         <span className={`freshness ${unavailable ? "freshness--stale" : ""}`}>
-          {unavailable ? "Live arrivals unavailable" : `Arrival times as of ${(passenger ? formatPassengerDateTime : formatSimTimestamp)(board.asOf)}`}
+          {unavailable ? "Live arrivals unavailable" : `Arrival times as of ${passenger
+            ? formatLocalTime(board.asOf, { date: "always" })
+            : formatSimTimestamp(board.asOf)}`}
         </span>
-        <span className="wall-update">Last updated {(passenger ? formatPassengerDateTime : formatWallTimestamp)(board.updatedAt)}</span>
+        <span className="wall-update">Last updated {passenger
+          ? formatLocalTime(board.updatedAt)
+          : formatWallTimestamp(board.updatedAt)}</span>
       </div>
       {board.restrictions.length > 0 && (
         <div className="restriction-list">

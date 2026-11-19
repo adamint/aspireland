@@ -146,10 +146,10 @@ public sealed class AiToolTests
 
         var response = capture.BuildResponse("Take a fictional train at 11:34 AM.");
 
-        Assert.Contains("step-free route", response.Text);
+        Assert.Contains("step-free trip", response.Text);
         Assert.Contains("30 minutes", response.Text);
         Assert.Contains("7:04 AM", response.Text);
-        Assert.Contains("America/New_York", response.Text);
+        Assert.DoesNotContain("America/New_York", response.Text);
         Assert.Contains("Airport Express", response.Text);
         Assert.Contains("Union Terminal", response.Text);
         Assert.Contains("wait about 2 minutes", response.Text);
@@ -166,6 +166,45 @@ public sealed class AiToolTests
     [InlineData("")]
     public void InvalidOrNonIanaViewerZoneIsRejected(string zone) =>
         Assert.Throws<AiEndpoints.RequestValidationException>(() => AiEndpoints.ResolveViewerTimeZone(zone));
+
+    [Fact]
+    public void ExplicitTwentyFourHourRoundTripTimesUseTheViewerServiceDayAndOffset()
+    {
+        var timing = AiEndpoints.ResolvePassengerTripTiming(
+            new AssistantRequest("Round trip from airport to medical center, ready at 10:30 local and returning around 15:00."),
+            new DateTimeOffset(2026, 11, 18, 14, 0, 0, TimeSpan.Zero),
+            AiEndpoints.ResolveViewerTimeZone(null));
+
+        Assert.NotNull(timing);
+        Assert.Equal(DateTimeOffset.Parse("2026-11-19T10:30:00+00:00"), timing.OutboundTime);
+        Assert.Equal(DateTimeOffset.Parse("2026-11-19T15:00:00+00:00"), timing.ReturnTime);
+    }
+
+    [Fact]
+    public void OvernightReturnUsesTheNextViewerLocalDay()
+    {
+        var timing = AiEndpoints.ResolvePassengerTripTiming(
+            new AssistantRequest("Round trip from airport to medical center, leaving at 11:30 p.m. and returning at 12:15 a.m."),
+            new DateTimeOffset(2026, 7, 18, 12, 0, 0, TimeSpan.Zero),
+            AiEndpoints.ResolveViewerTimeZone("America/New_York"));
+
+        Assert.NotNull(timing);
+        Assert.Equal(DateTimeOffset.Parse("2026-07-18T23:30:00-04:00"), timing.OutboundTime);
+        Assert.Equal(DateTimeOffset.Parse("2026-07-19T00:15:00-04:00"), timing.ReturnTime);
+    }
+
+    [Fact]
+    public void ExplicitRiderDateOverridesTheApplicableServiceDay()
+    {
+        var timing = AiEndpoints.ResolvePassengerTripTiming(
+            new AssistantRequest("Round trip from airport to medical center on November 20, 2026 at 10:30 a.m., returning at 3 p.m."),
+            new DateTimeOffset(2026, 11, 18, 8, 0, 0, TimeSpan.Zero),
+            AiEndpoints.ResolveViewerTimeZone("Europe/Lisbon"));
+
+        Assert.NotNull(timing);
+        Assert.Equal(DateTimeOffset.Parse("2026-11-20T10:30:00+00:00"), timing.OutboundTime);
+        Assert.Equal(DateTimeOffset.Parse("2026-11-20T15:00:00+00:00"), timing.ReturnTime);
+    }
 
     [Fact]
     public void HoldAmountIsRetainedInStoredProposal()

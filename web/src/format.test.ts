@@ -1,17 +1,31 @@
 import { expect, it } from "vitest";
-import { formatDateTimeLocal, formatPassengerDateTime, formatSimTimestamp, parseSimulatedLocalInput } from "./format";
+import { formatDateTimeLocal, formatLocalTime, formatPassengerDateTime, formatSimTimestamp, parseSimulatedLocalInput } from "./format";
 
-it("shows a friendly rider date in the local zone across midnight, without zone suffixes", () => {
-  const instant = "2026-11-18T00:59:00Z";
-  expect(formatPassengerDateTime(instant, "Europe/Lisbon", "en-US")).toBe("Wednesday, November 18 at 12:59 AM");
-  expect(formatPassengerDateTime(instant, "America/Los_Angeles", "en-US")).toBe("Tuesday, November 17 at 4:59 PM");
-  expect(formatPassengerDateTime(instant, "Europe/Lisbon", "fr-FR")).toContain("mercredi 18 novembre");
+it("uses one short locale-aware local-time formatter with dates only when requested", () => {
+  const instant = "2026-11-18T15:00:00Z";
+  expect(formatLocalTime(instant, { timeZone: "Europe/Lisbon", locale: "en-US" })).toBe("3:00 PM");
+  expect(formatLocalTime(instant, { timeZone: "Europe/Lisbon", locale: "pt-PT" })).toBe("15:00");
+  expect(formatLocalTime(instant, { timeZone: "America/New_York", locale: "en-US" })).toBe("10:00 AM");
+  expect(formatLocalTime(instant, {
+    timeZone: "America/New_York",
+    locale: "en-US",
+    date: "if-different",
+    relativeTo: "2026-11-19T15:00:00Z",
+  })).toBe("Wed, Nov 18, 10:00 AM");
 });
 
-it("shows simulation instants in the viewer's zone, including its label", () => {
+it("shows a short rider date in the local zone across midnight, without zone suffixes", () => {
+  const instant = "2026-11-18T00:59:00Z";
+  expect(formatPassengerDateTime(instant, "Europe/Lisbon", "en-US")).toBe("Wed, Nov 18, 12:59 AM");
+  expect(formatPassengerDateTime(instant, "America/Los_Angeles", "en-US")).toBe("Tue, Nov 17, 4:59 PM");
+  expect(formatPassengerDateTime(instant, "Europe/Lisbon", "fr-FR")).toContain("mer. 18 nov.");
+});
+
+it("shows short simulation instants in the viewer's zone without repeating the zone", () => {
   const label = formatSimTimestamp("2026-11-17T11:34:24Z", "America/New_York");
-  expect(label).toContain("6:34 AM EST");
+  expect(label).toContain("Tue, Nov 17, 6:34 AM");
   expect(label).not.toContain("11:34");
+  expect(label).not.toContain("EST");
 });
 
 it("round-trips leave-later input in the same IANA zone", () => {

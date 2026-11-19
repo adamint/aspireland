@@ -2,6 +2,8 @@ using System.Text.Json;
 using System.Security.Cryptography;
 using System.Text;
 using System.ClientModel.Primitives;
+using System.Globalization;
+using System.Text.RegularExpressions;
 using Azure.Identity;
 using Microsoft.Extensions.Azure;
 using Microsoft.AspNetCore.Builder;
@@ -17,6 +19,18 @@ public static class AiEndpoints
     private const long MaximumAudioBytes = 10 * 1024 * 1024;
     private const long MaximumMultipartBytes = MaximumAudioBytes + 512 * 1024;
     private static readonly ProposalStore Proposals = new();
+    private static readonly Regex PassengerTimePattern = new(
+        @"(?<!\d)(?<hour>\d{1,2})(?::(?<minute>\d{2}))?\s*(?<meridiem>a\.?\s*m\.?|p\.?\s*m\.?)(?![a-z])",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex PassengerTwentyFourHourTimePattern = new(
+        @"(?<!\d)(?<hour>(?:[01]?\d|2[0-3])):(?<minute>[0-5]\d)(?!\s*(?:a\.?\s*m\.?|p\.?\s*m\.?))",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex IsoDatePattern = new(
+        @"(?<!\d)(?<date>\d{4}-\d{2}-\d{2})(?!\d)",
+        RegexOptions.CultureInvariant);
+    private static readonly Regex NamedDatePattern = new(
+        @"\b(?<date>(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}(?:,\s*\d{4})?)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     public static void ConfigureServices(WebApplicationBuilder builder)
     {
@@ -100,7 +114,7 @@ public static class AiEndpoints
             var viewerTimeZone = ResolveViewerTimeZone(request.ViewerTimeZone);
             var world = await tools.TryGetWorldAsync(cancellationToken);
             var prompt = BuildSystemPrompt(role, world, viewerTimeZone);
-            var response = await openAi.CompleteAsync(request, prompt, tools, cancellationToken);
+            var response = await openAi.CompleteAsync(request, prompt, tools, cancellationToken, world?.SimTime);
             return Results.Json(response, Wire.Json);
         }
         catch (RequestValidationException exception)
@@ -306,9 +320,10 @@ public static class AiEndpoints
             (string.IsNullOrWhiteSpace(request.JourneyContext.Origin) ||
              string.IsNullOrWhiteSpace(request.JourneyContext.Destination) ||
              request.JourneyContext.Origin.Length > 100 ||
-             request.JourneyContext.Destination.Length > 100))
+             request.JourneyContext.Destination.Length > 100 ||
+             request.JourneyContext.SavedOutboundId?.Length > 100))
         {
-            throw new RequestValidationException("Journey context station names must be at most 100 characters.");
+            throw new RequestValidationException("Journey context values are invalid.");
         }
     }
 
@@ -320,6 +335,106 @@ public static class AiEndpoints
             TimeZoneInfo.TryFindSystemTimeZoneById(timeZone, out var zone))
             return zone;
         throw new RequestValidationException("viewerTimeZone must be a supported IANA time zone, such as America/New_York.");
+    }
+
+    internal static PassengerTripTiming? ResolvePassengerTripTiming(
+        AssistantRequest request,
+        DateTimeOffset? serviceTime,
+        TimeZoneInfo viewerTimeZone)
+    {
+        if (serviceTime is null) return null;
+        var awaitingReturn = request.JourneyContext?.AwaitingReturnTime == true;
+        var roundTrip = awaitingReturn ||
+            request.Message.Contains("round trip", StringComparison.OrdinalIgnoreCase) ||
+            request.Message.Contains("round-trip", StringComparison.OrdinalIgnoreCase);
+        if (!roundTrip) return null;
+
+        var parsedTimes = PassengerTimePattern.Matches(request.Message)
+            .Select(match => (match.Index, Time: ParseTime(match)))
+            .Concat(PassengerTwentyFourHourTimePattern.Matches(request.Message)
+                .Select(match => (match.Index, Time: ParseTwentyFourHourTime(match))))
+            .Where(item => item.Time is not null)
+            .OrderBy(item => item.Index)
+            .Select(item => item.Time!.Value)
+            .ToArray();
+        if (parsedTimes.Length == 0) return null;
+
+        var localServiceTime = TimeZoneInfo.ConvertTime(serviceTime.Value, viewerTimeZone);
+        var explicitDate = ExplicitDate(request.Message, DateOnly.FromDateTime(localServiceTime.DateTime));
+
+        if (awaitingReturn)
+        {
+            var outbound = request.JourneyContext!.DepartureTime;
+            var outboundLocal = outbound is null
+                ? localServiceTime
+                : TimeZoneInfo.ConvertTime(outbound.Value, viewerTimeZone);
+            var returnDate = explicitDate ?? DateOnly.FromDateTime(outboundLocal.DateTime);
+            if (explicitDate is null && parsedTimes[0] <= TimeOnly.FromDateTime(outboundLocal.DateTime))
+                returnDate = returnDate.AddDays(1);
+            var followUpReturnTime = LocalInstant(returnDate, parsedTimes[0], viewerTimeZone);
+            return followUpReturnTime is null ? null : new(true, outbound, followUpReturnTime);
+        }
+
+        var outboundDate = explicitDate ?? DateOnly.FromDateTime(localServiceTime.DateTime);
+        if (explicitDate is null && parsedTimes[0] < TimeOnly.FromDateTime(localServiceTime.DateTime))
+            outboundDate = outboundDate.AddDays(1);
+        var outboundTime = LocalInstant(outboundDate, parsedTimes[0], viewerTimeZone);
+        if (outboundTime is null) return null;
+
+        DateTimeOffset? returnTime = null;
+        if (parsedTimes.Length > 1)
+        {
+            var returnDate = outboundDate;
+            if (parsedTimes[1] <= parsedTimes[0]) returnDate = returnDate.AddDays(1);
+            returnTime = LocalInstant(returnDate, parsedTimes[1], viewerTimeZone);
+            if (returnTime is null) return null;
+        }
+        return new(true, outboundTime, returnTime);
+    }
+
+    private static TimeOnly? ParseTime(Match match)
+    {
+        if (!int.TryParse(match.Groups["hour"].Value, out var hour) || hour is < 1 or > 12)
+            return null;
+        var minute = match.Groups["minute"].Success &&
+            int.TryParse(match.Groups["minute"].Value, out var parsedMinute) ? parsedMinute : 0;
+        if (minute is < 0 or > 59) return null;
+        var meridiem = match.Groups["meridiem"].Value.Replace(".", "").Replace(" ", "");
+        if (meridiem.StartsWith("p", StringComparison.OrdinalIgnoreCase) && hour < 12) hour += 12;
+        if (meridiem.StartsWith("a", StringComparison.OrdinalIgnoreCase) && hour == 12) hour = 0;
+        return new TimeOnly(hour, minute);
+    }
+
+    private static TimeOnly? ParseTwentyFourHourTime(Match match) =>
+        int.TryParse(match.Groups["hour"].Value, out var hour) &&
+        int.TryParse(match.Groups["minute"].Value, out var minute)
+            ? new TimeOnly(hour, minute)
+            : null;
+
+    private static DateTimeOffset? LocalInstant(DateOnly date, TimeOnly time, TimeZoneInfo viewerTimeZone)
+    {
+        var local = DateTime.SpecifyKind(date.ToDateTime(time), DateTimeKind.Unspecified);
+        if (viewerTimeZone.IsInvalidTime(local) || viewerTimeZone.IsAmbiguousTime(local)) return null;
+        return new DateTimeOffset(local, viewerTimeZone.GetUtcOffset(local));
+    }
+
+    private static DateOnly? ExplicitDate(string message, DateOnly serviceDate)
+    {
+        if (IsoDatePattern.Match(message) is { Success: true } iso &&
+            DateOnly.TryParseExact(iso.Groups["date"].Value, "yyyy-MM-dd", CultureInfo.InvariantCulture,
+                DateTimeStyles.None, out var isoDate))
+            return isoDate;
+
+        if (NamedDatePattern.Match(message) is not { Success: true } named) return null;
+        var text = named.Groups["date"].Value;
+        if (text.Any(char.IsDigit) && Regex.IsMatch(text, @"\b\d{4}\b", RegexOptions.CultureInvariant) &&
+            DateOnly.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces, out var dated))
+            return dated;
+        if (!DateTime.TryParseExact(text, ["MMMM d", "MMM d"], CultureInfo.InvariantCulture,
+                DateTimeStyles.AllowWhiteSpaces, out var withoutYear))
+            return null;
+        var candidate = new DateOnly(serviceDate.Year, withoutYear.Month, withoutYear.Day);
+        return candidate < serviceDate ? candidate.AddYears(1) : candidate;
     }
 
     internal static string BuildSystemPrompt(string role, ScenarioContext? world, TimeZoneInfo viewerTimeZone)
@@ -359,7 +474,9 @@ public static class AiEndpoints
                 You can resolve stations, read system status and arrivals, and plan journeys. You cannot dispatch trains or perform operator actions.
                 Use the request journey context for follow-up questions such as accessibility changes, but call plan_journey again for a fresh itinerary.
                 For a new trip without an outbound time, omit departureTime to leave now. Step-free travel is optional unless requested. Do not ask for either before planning.
-                For a round trip with no return time, call plan_journey once for the outbound with askReturnTime set to true, then show the outbound itinerary and ask when the rider wants to return. When given a return time, plan both directions in order and pass the return time explicitly for the second trip. Never guess a return time.
+                For a round trip with both times, call plan_journey once with departureTime and returnTime. For a round trip with no return time, call it once for the outbound with askReturnTime set to true, show that itinerary, and ask when the rider wants to return. On the time-only reply, call plan_journey once using the saved journey context; do not recompute the outbound. Never guess a return time.
+                Treat a requested departure as the time the rider is ready to travel, not a guaranteed boarding time. Do not invent airport or security buffers.
+                Keep route answers compact. Label outbound and return legs, then give readiness time, approximate arrival, line and direction, transfers, and only decision-relevant warnings. For arrival questions, show only the next few useful departures. Do not repeat the viewer zone or date when the day is already clear, and never expose headway internals or station IDs.
                 Example: "round trip from Museum Quater to Airport" starts with plan_journey using origin "Museum Quater", destination "Airport", and askReturnTime true, with no departureTime.
                 Never recommend Airport Express for Aerocity because it does not stop there.
                 """;
@@ -397,4 +514,5 @@ public static class AiEndpoints
 
     private sealed record SpeechRequest(string Text);
     internal sealed class RequestValidationException(string message) : Exception(message);
+    internal sealed record PassengerTripTiming(bool RoundTrip, DateTimeOffset? OutboundTime, DateTimeOffset? ReturnTime);
 }

@@ -82,12 +82,17 @@ public sealed class AiTransportTests
                     tool => tool.GetProperty("name").GetString() == "plan_journey");
                 Assert.Equal("boolean", planner.GetProperty("parameters").GetProperty("properties")
                     .GetProperty("askReturnTime").GetProperty("type").GetString());
+                Assert.Equal("string", planner.GetProperty("parameters").GetProperty("properties")
+                    .GetProperty("returnTime").GetProperty("type").GetString());
                 var instructions = json.RootElement.GetProperty("instructions").GetString();
                 Assert.Contains("Call plan_journey first with those station names as written", instructions);
                 Assert.Contains("Only ask about supplied names if plan_journey reports ambiguity or no match", instructions);
                 Assert.Contains("omit departureTime to leave now", instructions);
                 Assert.Contains("Step-free travel is optional unless requested", instructions);
-                Assert.Contains("call plan_journey once for the outbound with askReturnTime set to true", instructions);
+                Assert.Contains("call it once for the outbound with askReturnTime set to true", instructions);
+                Assert.Contains("call plan_journey once with departureTime and returnTime", instructions);
+                Assert.Contains("do not recompute the outbound", instructions);
+                Assert.Contains("Do not invent airport or security buffers", instructions);
                 Assert.Contains("Never guess a return time", instructions);
             }
             return JsonResponse(modelResponses.Dequeue());
@@ -119,13 +124,17 @@ public sealed class AiTransportTests
 
         Assert.NotEmpty(requests);
         Assert.Equal(new JourneyRequest("airport", "central-exchange"), requests[0]);
-        Assert.StartsWith("The route from Airport to Central Exchange takes about 20 minutes", result.Text);
+        Assert.StartsWith("**Outbound**", result.Text);
+        Assert.Contains("Approx. arrival at Central Exchange", result.Text);
+        Assert.Contains("20 minutes", result.Text);
         Assert.DoesNotContain("fictional", result.Text);
         if (returnTimeKnown)
         {
             Assert.Equal(new JourneyRequest("central-exchange", "airport", DepartureTime: DateTimeOffset.Parse(departure)), requests[1]);
             Assert.Equal(2, requests.Count);
-            Assert.Contains("The route from Central Exchange to Airport takes about 22 minutes", result.Text);
+            Assert.Contains("**Return**", result.Text);
+            Assert.Contains("Approx. arrival at Airport", result.Text);
+            Assert.Contains("22 minutes", result.Text);
             Assert.DoesNotContain("What time", result.Text);
         }
         else
@@ -134,6 +143,121 @@ public sealed class AiTransportTests
             Assert.Contains("What time would you like to head back?", result.Text);
             Assert.DoesNotContain("The route from Central Exchange to Airport", result.Text);
         }
+    }
+
+    [Theory]
+    [InlineData("Europe/Lisbon", "2026-11-18T10:30:00+00:00", "2026-11-18T15:00:00+00:00")]
+    [InlineData("America/New_York", "2026-11-18T10:30:00-05:00", "2026-11-18T15:00:00-05:00")]
+    [InlineData("America/New_York", "2026-07-18T10:30:00-04:00", "2026-07-18T15:00:00-04:00")]
+    public async Task SignalHonorsBothExplicitLocalRoundTripTimesFromTheExactRiderTurn(
+        string viewerTimeZone,
+        string expectedOutbound,
+        string expectedReturn)
+    {
+        const string question = "Can you plan a round trip from airport to medical center for me, please? I'm going to fly in and arrive at 10:30 a.m. local time, and I will be leaving the medical center around 3 p.m.";
+        var toolCall = JsonSerializer.Serialize(new
+        {
+            id = "resp-round-trip", @object = "response", created_at = 1, model = "gpt-5-mini", status = "completed",
+            output = new[] { new { id = "fc-round-trip", type = "function_call", status = "completed",
+                call_id = "round-trip", name = "plan_journey",
+                arguments = """{"origin":"airport","destination":"medical center","askReturnTime":true}""" } }
+        });
+        var modelResponses = new Queue<string>([toolCall, TextResponse]);
+        using var modelHttp = new HttpClient(new Handler((_, _) =>
+            Task.FromResult(JsonResponse(modelResponses.Dequeue()))));
+        var requests = new List<JourneyRequest>();
+        var serviceDate = DateTimeOffset.Parse(expectedOutbound).Date;
+        using var serviceHttp = new HttpClient(new Handler(async (request, _) =>
+        {
+            var trip = JsonSerializer.Deserialize<JourneyRequest>(await request.Content!.ReadAsStringAsync(), Wire.Json)!;
+            requests.Add(trip);
+            var start = trip.DepartureTime ?? new DateTimeOffset(serviceDate, TimeSpan.Zero);
+            return JsonResponse(JsonSerializer.Serialize(
+                new JourneyResult("test", 1, 1, start, trip,
+                    [new() { TotalSeconds = 1800, ArrivesAt = start.AddMinutes(30),
+                        Legs = [new() { Line = trip.Origin == "airport" ? "AX" : "Green",
+                            From = trip.Origin, To = trip.Destination, Destination = trip.Destination }] }]),
+                Wire.Json));
+        }));
+        var localDate = serviceDate == new DateTime(2026, 7, 18)
+            ? new DateTimeOffset(2026, 7, 18, 8, 0, 0, TimeSpan.Zero)
+            : new DateTimeOffset(2026, 11, 18, 8, 0, 0, TimeSpan.Zero);
+
+        var result = await Client(modelHttp).CompleteAsync(
+            new AssistantRequest(question, ViewerTimeZone: viewerTimeZone),
+            AiEndpoints.BuildSystemPrompt("passenger", null, AiEndpoints.ResolveViewerTimeZone(viewerTimeZone)),
+            new PassengerToolRegistry(new ProposalStore(), new ServiceJsonClient(serviceHttp)),
+            CancellationToken.None,
+            localDate);
+
+        Assert.Equal(2, requests.Count);
+        Assert.Equal(DateTimeOffset.Parse(expectedOutbound), requests[0].DepartureTime);
+        Assert.Equal(new JourneyRequest("airport", "medical-center", DepartureTime: DateTimeOffset.Parse(expectedOutbound)), requests[0]);
+        Assert.Equal(new JourneyRequest("medical-center", "airport", DepartureTime: DateTimeOffset.Parse(expectedReturn)), requests[1]);
+        Assert.Contains("Outbound", result.Text);
+        Assert.Contains("Return", result.Text);
+        Assert.DoesNotContain("What time", result.Text);
+        Assert.DoesNotContain("simulat", result.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("medical-center", result.Text);
+    }
+
+    [Fact]
+    public async Task SignalReusesSavedOutboundWhenAGenuinelyMissingReturnGetsATimeOnlyReply()
+    {
+        const string firstQuestion = "Plan a round trip from airport to medical center. I arrive at 10:30 a.m. local time.";
+        static string ToolCall(string id, string arguments) => JsonSerializer.Serialize(new
+        {
+            id = $"resp-{id}", @object = "response", created_at = 1, model = "gpt-5-mini", status = "completed",
+            output = new[] { new { id = $"fc-{id}", type = "function_call", status = "completed",
+                call_id = id, name = "plan_journey", arguments } }
+        });
+        var modelResponses = new Queue<string>([
+            ToolCall("outbound", """{"origin":"airport","destination":"medical center","askReturnTime":true}"""),
+            TextResponse,
+            ToolCall("return", """{}"""),
+            TextResponse,
+        ]);
+        var modelRequests = 0;
+        using var modelHttp = new HttpClient(new Handler((_, _) =>
+        {
+            modelRequests++;
+            return Task.FromResult(JsonResponse(modelResponses.Dequeue()));
+        }));
+        var requests = new List<JourneyRequest>();
+        using var serviceHttp = new HttpClient(new Handler(async (request, _) =>
+        {
+            var trip = JsonSerializer.Deserialize<JourneyRequest>(await request.Content!.ReadAsStringAsync(), Wire.Json)!;
+            requests.Add(trip);
+            var start = trip.DepartureTime ?? DateTimeOffset.Parse("2026-11-18T08:00:00+00:00");
+            return JsonResponse(JsonSerializer.Serialize(
+                new JourneyResult("test", 1, 1, start, trip,
+                    [new() { TotalSeconds = 1800, ArrivesAt = start.AddMinutes(30),
+                        Legs = [new() { Line = trip.Origin == "airport" ? "AX" : "Green",
+                            From = trip.Origin, To = trip.Destination, Destination = trip.Destination }] }]),
+                Wire.Json));
+        }));
+        var client = Client(modelHttp);
+        var tools = new PassengerToolRegistry(new ProposalStore(), new ServiceJsonClient(serviceHttp));
+        var zone = AiEndpoints.ResolveViewerTimeZone("Europe/Lisbon");
+        var prompt = AiEndpoints.BuildSystemPrompt("passenger", null, zone);
+        var serviceTime = DateTimeOffset.Parse("2026-11-18T08:00:00+00:00");
+
+        var outbound = await client.CompleteAsync(
+            new AssistantRequest(firstQuestion, ViewerTimeZone: zone.Id),
+            prompt, tools, CancellationToken.None, serviceTime);
+        var roundTrip = await client.CompleteAsync(
+            new AssistantRequest("Around 3 p.m.", JourneyContext: outbound.JourneyContext, ViewerTimeZone: zone.Id),
+            prompt, tools, CancellationToken.None, serviceTime);
+
+        Assert.Equal(2, requests.Count);
+        Assert.Equal(DateTimeOffset.Parse("2026-11-18T10:30:00+00:00"), requests[0].DepartureTime);
+        Assert.Equal(new JourneyRequest("medical-center", "airport",
+            DepartureTime: DateTimeOffset.Parse("2026-11-18T15:00:00+00:00")), requests[1]);
+        Assert.Contains("What time would you like to head back?", outbound.Text);
+        Assert.Contains("Outbound", roundTrip.Text);
+        Assert.Contains("Return", roundTrip.Text);
+        Assert.DoesNotContain("What time", roundTrip.Text);
+        Assert.Equal(2, modelRequests);
     }
 
     [Theory]

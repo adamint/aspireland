@@ -1,4 +1,4 @@
-import { formatDuration, formatPassengerDateTime, formatSimTimestamp, publicPlatformLabel, stationName, titleCase } from "../format";
+import { formatDuration, formatLocalTime, formatSimTimestamp, publicPlatformLabel, stationName, titleCase } from "../format";
 import type { JourneyLeg, JourneyResult, NetworkDefinition } from "../types";
 
 interface JourneyCardsProps {
@@ -46,7 +46,9 @@ function legPlatform(leg: JourneyLeg, network?: NetworkDefinition): string | nul
 }
 
 export function JourneyCards({ result, network, currentGeneration, currentScenarioId, passenger = false }: JourneyCardsProps) {
-  const timestamp = passenger ? formatPassengerDateTime : formatSimTimestamp;
+  const updatedTime = passenger
+    ? formatLocalTime(result.asOf, { date: "always" })
+    : formatSimTimestamp(result.asOf);
   const invalidated = (currentGeneration !== undefined && result.generation !== currentGeneration) ||
     (currentScenarioId !== undefined && result.scenarioId !== currentScenarioId);
   return (
@@ -61,7 +63,7 @@ export function JourneyCards({ result, network, currentGeneration, currentScenar
           </h3>
         </div>
         <span className={`freshness ${invalidated ? "freshness--stale" : ""}`}>
-          {invalidated ? "Service information changed · plan again" : `Updated ${timestamp(result.asOf)}`}
+          {invalidated ? "Service information changed · plan again" : `Updated ${updatedTime}`}
         </span>
       </div>
       {result.error && <div className="notice notice--error">{result.error}</div>}
@@ -100,7 +102,9 @@ export function JourneyCards({ result, network, currentGeneration, currentScenar
               ))}
             </ol>
             <footer>
-              <span>Arrive {timestamp(option.arrivesAt)}</span>
+              <span>Arrive {passenger
+                ? formatLocalTime(option.arrivesAt, { date: "if-different", relativeTo: result.asOf })
+                : formatSimTimestamp(option.arrivesAt)}</span>
               {option.warnings.length > 0 && (
                 <ul>
                   {option.warnings.map((warning) => <li key={warning}>{warning}</li>)}

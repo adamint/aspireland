@@ -22,7 +22,8 @@ internal sealed class OpenAiClient(OpenAiSettings settings, OpenAIClient? client
         AssistantRequest request,
         string systemPrompt,
         AssistantToolRegistry tools,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        DateTimeOffset? serviceTime = null)
     {
         EnsureAvailable(settings.TextEnabled, "Text assistance");
         using var activity = StartActivity("chat", settings.TextModel);
@@ -47,8 +48,18 @@ internal sealed class OpenAiClient(OpenAiSettings settings, OpenAIClient? client
             options.Tools.Add(ResponseTool.CreateFunctionTool(definition.Name,
                 BinaryData.FromString(definition.Parameters.GetRawText()), strictModeEnabled: false, definition.Description));
         var names = tools.Definitions.Select(tool => tool.Name).ToHashSet(StringComparer.Ordinal);
-        var capture = new AssistantCapture(request.JourneyContext, AiEndpoints.ResolveViewerTimeZone(request.ViewerTimeZone));
         var passenger = tools is PassengerToolRegistry;
+        var viewerTimeZone = AiEndpoints.ResolveViewerTimeZone(request.ViewerTimeZone);
+        var timing = passenger
+            ? AiEndpoints.ResolvePassengerTripTiming(request, serviceTime, viewerTimeZone)
+            : null;
+        var capture = new AssistantCapture(request.JourneyContext, viewerTimeZone, timing);
+        if (passenger && capture.HasSavedOutbound && timing?.ReturnTime is not null)
+        {
+            await tools.ExecuteAsync("plan_journey", "{}", capture, cancellationToken);
+            if (capture.Journey is not null || capture.Clarification is not null)
+                return capture.BuildResponse("", passenger: true);
+        }
         var iterations = 0;
         var calls = 0;
         while (true)
