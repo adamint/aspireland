@@ -51,17 +51,23 @@ npm ci --prefix web
 npm run build:conference --prefix web
 env MetroOps__ProvisionFoundry=false \
   "Parameters__postgres-password=$(cat "$HOME/.config/metroops/postgres-password")" \
-  dotnet aspire start --isolated --non-interactive
+  dotnet aspire start --launch-profile demo --non-interactive
 dotnet aspire wait passenger-api --timeout 180 --non-interactive
 dotnet aspire wait operations-web --timeout 180 --non-interactive
 dotnet aspire describe --non-interactive
 ```
 
-Start the attendee origin in a private terminal. Set `PASSENGER_API_PORT` to
-the **HTTP port of `passenger-api`** in Aspire, not `passenger-web`. Keep this
-process running for the talk.
+Use the `demo` profile for only one instance on the host. It keeps the dashboard
+at `https://localhost:17380`, Rider at `http://127.0.0.1:17381`, and Dispatch at
+`http://127.0.0.1:17382`. Use `dotnet aspire start --isolated --non-interactive`
+without the `demo` profile in other worktrees.
+
+Start the attendee origin in a private terminal. The `demo` profile keeps the
+Passenger API upstream on `127.0.0.1:17383`; the attendee origin still listens
+on `127.0.0.1:6173`. Keep this process running for the talk.
 
 ```sh
+export PASSENGER_API_PORT=17383
 npm run start:conference --prefix web -- \
   --port 6173 --upstream "http://127.0.0.1:$PASSENGER_API_PORT"
 ```

@@ -55,7 +55,7 @@ var agentKey = builder.AddParameter("agent-key",
 
 var postgres = builder.AddPostgres("postgres")
     .WithTags("infrastructure")
-    .WithDataVolume(builder.Configuration["MetroOps:PostgresVolume"] ?? "aspireland-metroops-postgres");
+    .WithDataVolume(builder.Configuration["MetroOps:PostgresVolume"]);
 var database = postgres.AddDatabase("metro").WithTags("infrastructure");
 var broker = builder.AddRabbitMQ("events").WithTags("infrastructure");
 var cache = builder.AddRedis("cache").WithTags("infrastructure");
@@ -294,16 +294,29 @@ foreach (var train in Fleet.Trains)
         .WaitFor(control);
 }
 
-builder.AddViteApp("operations-web", "web").WithEnvironment("VITE_SITE", "operations")
+var operationsWeb = builder.AddViteApp("operations-web", "web").WithEnvironment("VITE_SITE", "operations")
     .WithEnvironment("API_URL", operations.GetEndpoint("http")).WithEnvironment("OPERATOR_KEY", operatorKey)
     .WaitFor(operations).WithExternalHttpEndpoints()
     .WithUrlForEndpoint("http", url => url.DisplayText = "Dispatch console")
     .WithTags("interactive");
-builder.AddViteApp("passenger-web", "web").WithEnvironment("VITE_SITE", "passenger")
+var passengerWeb = builder.AddViteApp("passenger-web", "web").WithEnvironment("VITE_SITE", "passenger")
     .WithEnvironment("API_URL", passenger.GetEndpoint("http"))
     .WaitFor(passenger).WithExternalHttpEndpoints()
     .WithUrlForEndpoint("http", url => url.DisplayText = "Rider site")
     .WithTags("interactive");
+
+if (builder.Configuration.GetValue("MetroOps:StablePorts", false))
+{
+    passengerWeb.WithEndpoint("http", endpoint => SetLoopbackPort(endpoint, 17381));
+    operationsWeb.WithEndpoint("http", endpoint => SetLoopbackPort(endpoint, 17382));
+    passenger.WithEndpoint("http", endpoint => SetLoopbackPort(endpoint, 17383));
+}
+
+static void SetLoopbackPort(EndpointAnnotation endpoint, int port)
+{
+    endpoint.Port = port;
+    endpoint.TargetHost = "127.0.0.1";
+}
 
 var attendeeUrl = builder.Configuration["MetroOps:AttendeeUrl"];
 if (!string.IsNullOrWhiteSpace(attendeeUrl))

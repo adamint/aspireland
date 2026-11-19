@@ -19,10 +19,11 @@ Train movement, outages, and journey times follow the simulation clock.
   [`uv`](https://docs.astral.sh/uv/getting-started/installation/) with Python
   **3.13** (`uv python install 3.13`).
 
-From the clone, using its physical path. If an instance already uses the
-default database volume on this Docker engine, set `MetroOps__PostgresVolume`
-to a new name before starting. `--isolated` changes ports and user secrets,
-not the explicitly named database volume.
+From the clone, use its physical path. By default, Aspire names the Postgres
+volume from the AppHost path, so worktrees don't share it. To reuse the old
+default volume, set `MetroOps__PostgresVolume=aspireland-metroops-postgres`.
+Don't share an explicit volume name across running instances; `--isolated`
+doesn't change it.
 
 ```sh
 cd -P .
