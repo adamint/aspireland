@@ -8,12 +8,144 @@ using OpenAI;
 using MetroOps.Contracts;
 using MetroOps.AiHost;
 using MetroOps.Dispatch;
+using MetroOps.Domain;
 using Microsoft.Extensions.Configuration;
 
 namespace MetroOps.Runtime.Tests;
 
 public sealed class AiTransportTests
 {
+    [Fact]
+    public async Task Signal_recovers_the_attendee_trip_and_does_not_invent_a_nearest_station()
+    {
+        var world = Kernel.Create();
+        world.Incidents.Add(new() { Kind = "elevator-outage", Target = "east-junction", State = "active" });
+        var requests = new List<StepFreeRequest>();
+        using var serviceHttp = new HttpClient(new Handler(async (request, _) =>
+        {
+            Assert.Equal("/step-free", request.RequestUri!.AbsolutePath);
+            var input = JsonSerializer.Deserialize<StepFreeRequest>(await request.Content!.ReadAsStringAsync(), Wire.Json)!;
+            requests.Add(input);
+            return JsonResponse(JsonSerializer.Serialize(Kernel.CheckStepFree(world, input, world.UpdatedAt), Wire.Json));
+        }));
+        const string offer = "There is a lift outage at East Junction. Would you like me to plan a step-free trip?";
+        using var modelHttp = new HttpClient(new Handler((_, _) =>
+            Task.FromResult(JsonResponse(TextResponse.Replace("Done.", offer)))));
+        var client = Client(modelHttp);
+        var tools = new PassengerToolRegistry(new ProposalStore(), new ServiceJsonClient(serviceHttp));
+        var history = new List<ChatMessage>();
+        AssistantJourneyContext? context = null;
+        var messages = new[]
+        {
+            "Are there any elevator outages?", "I want to go from east junction to the airport",
+            "but accessibility ??", "what is the nearest best accessible route i can take?",
+            "what's the nearest accessible station right now to east junction"
+        };
+        foreach (var message in messages)
+        {
+            var answer = await client.CompleteAsync(new(message, [.. history], context),
+                AiEndpoints.BuildSystemPrompt("passenger", null, TimeZoneInfo.Utc), tools, CancellationToken.None, world.SimTime);
+            if (history.Count != 0)
+            {
+                Assert.True(answer.JourneyContext?.Accessible);
+                Assert.Contains("East Junction", answer.Text);
+                Assert.Contains("lift", answer.Text, StringComparison.OrdinalIgnoreCase);
+                Assert.Contains("Union Terminal", answer.Text);
+                Assert.Contains("Riverbank", answer.Text);
+                Assert.Contains("650 m", answer.Text);
+                Assert.Contains("rail", answer.Text, StringComparison.OrdinalIgnoreCase);
+                Assert.Contains("free on-demand ride", answer.Text);
+                Assert.DoesNotContain("West Junction", answer.Text);
+                Assert.DoesNotContain("No accessible route is available under current restrictions.", answer.Text);
+                Assert.DoesNotContain("Would you like me to plan", answer.Text);
+            }
+            history.Add(new("user", message));
+            history.Add(new("assistant", answer.Text));
+            context = answer.JourneyContext;
+        }
+        Assert.Equal(4, requests.Count);
+        Assert.All(requests, trip => Assert.Equal(new StepFreeRequest("east-junction", "airport"), trip));
+
+        var standalone = await client.CompleteAsync(new(messages[^1]), "", tools, CancellationToken.None, world.SimTime);
+        Assert.Contains("Union Terminal", standalone.Text);
+        Assert.Contains("walking", standalone.Text);
+        Assert.DoesNotContain("Airport", standalone.Text);
+        Assert.Equal(new StepFreeRequest("east-junction"), requests[^1]);
+    }
+
+    [Fact]
+    public async Task Signal_preserves_timed_accessibility_corrections_without_carrying_them_to_a_new_trip()
+    {
+        var world = Kernel.Create();
+        var departure = world.SimTime.AddHours(2);
+        var original = new AssistantJourneyContext("east-junction", "airport", DepartureTime: departure);
+        using var serviceHttp = new HttpClient(new Handler(async (request, _) =>
+        {
+            var body = await request.Content!.ReadAsStringAsync();
+            if (request.RequestUri!.AbsolutePath == "/step-free")
+            {
+                var input = JsonSerializer.Deserialize<StepFreeRequest>(body, Wire.Json)!;
+                Assert.Equal(new StepFreeRequest("east-junction", "airport", departure), input);
+                return JsonResponse(JsonSerializer.Serialize(Kernel.CheckStepFree(world, input, world.UpdatedAt), Wire.Json));
+            }
+            Assert.Equal("/journeys", request.RequestUri.AbsolutePath);
+            Assert.Equal(new JourneyRequest("university", "southbank"),
+                JsonSerializer.Deserialize<JourneyRequest>(body, Wire.Json));
+            return JsonResponse(JsonSerializer.Serialize(Kernel.Plan(world, new("university", "southbank")), Wire.Json));
+        }));
+        var modelResponses = new Queue<string>(
+        [
+            PlanCallResponse(new { origin = "university", destination = "southbank" }), TextResponse
+        ]);
+        using var modelHttp = new HttpClient(new Handler((_, _) => Task.FromResult(JsonResponse(modelResponses.Dequeue()))));
+        var client = Client(modelHttp);
+        var tools = new PassengerToolRegistry(new ProposalStore(), new ServiceJsonClient(serviceHttp));
+
+        var correction = await client.CompleteAsync(new("but accessibility ??", JourneyContext: original), "", tools, CancellationToken.None);
+        Assert.True(correction.Journey!.Options[0].Accessible);
+        Assert.Equal(departure, correction.JourneyContext?.DepartureTime);
+
+        var next = await client.CompleteAsync(new("I want to go from University to Southbank",
+            [new("assistant", correction.Text)], correction.JourneyContext), "", tools, CancellationToken.None);
+        Assert.False(next.JourneyContext?.Accessible);
+    }
+
+    [Fact]
+    public async Task Signal_declines_nearest_station_claims_when_planner_access_is_stale()
+    {
+        var world = Kernel.Create();
+        using var serviceHttp = new HttpClient(new Handler((_, _) => Task.FromResult(JsonResponse(JsonSerializer.Serialize(
+            Kernel.CheckStepFree(world, new("east-junction"), world.UpdatedAt.AddMinutes(1)), Wire.Json)))));
+        using var modelHttp = new HttpClient(new Handler((_, _) => throw new InvalidOperationException("No inference needed.")));
+
+        var result = await Client(modelHttp).CompleteAsync(new("what's the nearest accessible station right now to east junction"),
+            "", new PassengerToolRegistry(new ProposalStore(), new ServiceJsonClient(serviceHttp)), CancellationToken.None);
+
+        Assert.Contains("couldn't verify", result.Text);
+        Assert.DoesNotContain("Union Terminal", result.Text);
+        Assert.Null(result.Journey);
+    }
+
+    [Fact]
+    public async Task Signal_requires_planner_evidence_for_an_accessible_nearest_station_paraphrase()
+    {
+        using var modelHttp = new HttpClient(new Handler((_, _) =>
+            Task.FromResult(JsonResponse(TextResponse.Replace("Done.", "West Junction is the closest.")))));
+
+        var result = await Client(modelHttp).CompleteAsync(new("Which wheelchair-accessible station is closest to me?"),
+            "", new PassengerToolRegistry(new ProposalStore()), CancellationToken.None);
+
+        Assert.Contains("Which station are you starting from?", result.Text);
+        Assert.DoesNotContain("West Junction", result.Text);
+    }
+
+    private static string PlanCallResponse(object arguments) => JsonSerializer.Serialize(new
+    {
+        id = "resp-plan", @object = "response", created_at = 1, model = "gpt-5-mini", status = "completed",
+        output = new[] { new { id = "fc-plan", type = "function_call", status = "completed",
+            call_id = "plan", name = "plan_journey", arguments = JsonSerializer.Serialize(arguments) } }
+    });
+
     [Fact]
     public async Task SdkCompletionRunsTheSameBoundedApplicationTool()
     {

@@ -109,7 +109,13 @@ separate ASP.NET gateways. Scenario, Control, Dispatch and Incidents share a
 PostgreSQL transaction boundary for the world and audit history. Scenario
 keeps one pending passenger snapshot and publishes it to RabbitMQ.
 Information consumes it and writes a disposable Redis projection. Planner
-uses the scenario state for journeys. Two Python services generate demand
+uses the scenario state for journeys. Signal's step-free check verifies station
+access and onward rail options against the same fresh checkpoint. It ranks
+substitute stations by shortest modeled road distance across the authored
+links in `src/MetroOps.Domain/SurfaceNetwork.cs`, not by rail adjacency or the
+schematic map. Those distances are not verified walking routes. Riders who
+need accessible transit can get a free on-demand ride to a station; Signal
+does not book rides. Two Python services generate demand
 and summarize passenger inventory. The train
 workers talk to Control, and the optional model connections go only to the
 separate AI host. See [the resource table and walkthroughs](LEARNING.md).

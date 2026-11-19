@@ -50,14 +50,29 @@ internal sealed class OpenAiClient(OpenAiSettings settings, OpenAIClient? client
         var names = tools.Definitions.Select(tool => tool.Name).ToHashSet(StringComparer.Ordinal);
         var passenger = tools is PassengerToolRegistry;
         var viewerTimeZone = AiEndpoints.ResolveViewerTimeZone(request.ViewerTimeZone);
+        var access = passenger ? PassengerAccessIntent.Parse(request) : null;
         var journeyContext = passenger && AiEndpoints.IsExplicitRoundTrip(request.Message) &&
             request.JourneyContext?.AwaitingReturnTime == true ? null : request.JourneyContext;
         var timing = passenger
-            ? AiEndpoints.ResolvePassengerTripTiming(request, serviceTime, viewerTimeZone)
+            ? AiEndpoints.ResolvePassengerTripTiming(request with { JourneyContext = journeyContext }, serviceTime, viewerTimeZone)
             : null;
         if (timing?.Clarification is { } clarification)
             return new AssistantResponse(clarification, JourneyContext: journeyContext);
-        var capture = new AssistantCapture(journeyContext, viewerTimeZone, timing, serviceTime);
+        if (passenger && journeyContext is { } context &&
+            Network.Resolve(context.Origin) is { } origin && Network.Resolve(context.Destination) is { } destination)
+        {
+            options.Instructions += $"\nPrevious trip context (not current rider intent or live evidence): " +
+                $"{Network.Station(origin).Name} to {Network.Station(destination).Name}; " +
+                $"step-free: {context.Accessible}; departure: {context.DepartureTime:O}; " +
+                $"waiting for return time: {context.AwaitingReturnTime}.";
+        }
+        var capture = new AssistantCapture(journeyContext, viewerTimeZone, timing, serviceTime, access?.Accessible,
+            access?.UseTripContext == true);
+        if (access is { Tool: { } accessTool })
+        {
+            await tools.ExecuteAsync(accessTool, access.Arguments, capture, cancellationToken);
+            return capture.BuildResponse("I couldn't verify step-free service. Please check again before travelling.");
+        }
         if (passenger && capture.HasSavedOutbound && timing?.ReturnTime is not null)
         {
             await tools.ExecuteAsync("plan_journey", "{}", capture, cancellationToken);
@@ -81,6 +96,9 @@ internal sealed class OpenAiClient(OpenAiSettings settings, OpenAIClient? client
             var toolCalls = completion.OutputItems.OfType<FunctionCallResponseItem>().ToArray();
             if (toolCalls.Length == 0)
             {
+                if (access?.MissingEvidenceText is { } missingEvidence &&
+                    capture.StationAccess is null && capture.Journey?.Request.Accessible != true)
+                    return new AssistantResponse(missingEvidence, JourneyContext: capture.JourneyContext);
                 var text = completion.GetOutputText().Trim();
                 if (text.Length == 0)
                     throw new OpenAiProviderException("OpenAI returned an empty assistant response.");

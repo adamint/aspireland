@@ -301,6 +301,7 @@ function AccessibilityPanel({ world, network, stale }: { world: WorldState; netw
         <span className="eyebrow">Step-free travel</span>
         <h2>Elevator and station access</h2>
         <p>Choose “Step-free trip” to avoid stairs.</p>
+        <p>If you need accessible transit, you can get a free on-demand ride to a station.</p>
         <small>Last updated {formatLocalTime(world.updatedAt, {
           date: "if-different",
           relativeTo: world.simTime,

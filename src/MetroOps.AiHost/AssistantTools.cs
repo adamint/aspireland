@@ -23,6 +23,10 @@ internal sealed class AssistantCapture
     public string? StationDiagnosisText { get; set; }
     public string? Clarification { get; set; }
     public AssistantJourneyContext? JourneyContext { get; set; }
+    public bool? AccessiblePreference { get; }
+    public bool ReuseTripContext { get; }
+    public StepFreeResult? StationAccess { get; set; }
+    public Dictionary<JourneyRequest, StepFreeResult> StepFreeChecks { get; } = [];
     public List<string> Tools { get; } = [];
     public TimeZoneInfo ViewerTimeZone { get; }
     public bool HasSavedOutbound => _passengerJourneys.Count > 0 && JourneyContext?.AwaitingReturnTime == true;
@@ -31,12 +35,16 @@ internal sealed class AssistantCapture
         AssistantJourneyContext? journeyContext,
         TimeZoneInfo? viewerTimeZone = null,
         AiEndpoints.PassengerTripTiming? tripTiming = null,
-        DateTimeOffset? serviceTime = null)
+        DateTimeOffset? serviceTime = null,
+        bool? accessiblePreference = null,
+        bool reuseTripContext = false)
     {
         JourneyContext = journeyContext;
         ViewerTimeZone = viewerTimeZone ?? TimeZoneInfo.Utc;
         TripTiming = tripTiming;
         _serviceTime = serviceTime;
+        AccessiblePreference = accessiblePreference;
+        ReuseTripContext = reuseTripContext;
         if (journeyContext is { AwaitingReturnTime: true, SavedOutboundId: { } savedId } &&
             PassengerJourneyStore.TryGet(savedId, out var saved) &&
             saved.Request.Origin == journeyContext.Origin &&
@@ -74,6 +82,8 @@ internal sealed class AssistantCapture
     {
         if (Clarification is not null)
             return new AssistantResponse(Clarification, Tools: Tools, JourneyContext: JourneyContext);
+        if (passenger && StationAccess is { } stationAccess && Journey is null)
+            return new AssistantResponse(DescribeStepFree(stationAccess), Tools: Tools, JourneyContext: JourneyContext);
         if (StationDiagnosisText is not null && Journey is null && Comparison is null && Proposal is null)
             text = StationDiagnosisText;
         else if (Arrivals is not null && Journey is null && Comparison is null && Proposal is null)
@@ -104,7 +114,16 @@ internal sealed class AssistantCapture
         DateTimeOffset? outboundDeparture = null)
     {
         if (journey.Options.FirstOrDefault() is not { } itinerary)
+        {
+            if (passenger && journey.Request.Accessible)
+            {
+                var heading = label is null ? "" : $"**{label}**\n";
+                return heading + (StepFreeChecks.TryGetValue(journey.Request, out var stepFree)
+                    ? DescribeStepFree(stepFree)
+                    : "I couldn't verify a step-free trip. Please check again before travelling.");
+            }
             return journey.Error ?? "No journey is currently available between those stations.";
+        }
         var localDeparture = TimeZoneInfo.ConvertTime(Departure(journey), ViewerTimeZone);
         var localArrival = TimeZoneInfo.ConvertTime(itinerary.ArrivesAt, ViewerTimeZone);
         var arrival = LocalPassengerTime(localArrival, localDeparture);
@@ -123,6 +142,52 @@ internal sealed class AssistantCapture
         }
         var warning = itinerary.Warnings.Count > 0 ? " Check the estimate warnings on the card." : "";
         return $"{summary} ({ViewerTimeZone.Id}, simulated). The route card includes boarding waits and transfers.{warning}";
+    }
+
+    private string DescribeStepFree(StepFreeResult result)
+    {
+        if (result.Stale || result.OriginAccess is not { } origin)
+            return "I couldn't verify current step-free access. Please check again before travelling.";
+
+        var station = Network.Station(origin.StationId).Name;
+        var trip = result.Journey?.Request;
+        var destination = trip is null ? null : Network.Station(trip.Destination).Name;
+        var summary = destination is null
+            ? origin.Available ? $"Step-free station access is available at {station}." : $"Step-free station access is unavailable at {station}."
+            : $"I couldn't find a step-free rail trip from {station} to {destination}" +
+              (trip!.DepartureTime is { } departure
+                  ? $" leaving at {LocalPassengerTime(TimeZoneInfo.ConvertTime(departure, ViewerTimeZone), TimeZoneInfo.ConvertTime(result.AsOf, ViewerTimeZone))}."
+                  : " right now.");
+        var reasons = result.Blocks.Select(block =>
+        {
+            var name = Network.Station(block.StationId).Name;
+            return block.Kind switch
+            {
+                "elevator-outage" => $"A lift is out at {name}" +
+                    (block.Role == "transfer" ? ", blocking a step-free transfer." : "."),
+                "platform-closure" => $"Platform access is closed at {name}.",
+                "station-closure" => $"{name} is closed.",
+                _ => $"Step-free access is restricted at {name}."
+            };
+        });
+        var detail = string.Join(' ', reasons);
+        if (detail.Length > 0) summary += $" {detail}";
+        if (result.Alternatives.Count == 0)
+            return origin.Available && trip is null ? summary :
+                summary + " I couldn't verify another station that would work.";
+
+        var alternatives = result.Alternatives.Select(option =>
+        {
+            var name = Network.Station(option.StationId).Name;
+            var rail = option.TotalSeconds is not { } seconds ? "" :
+                $"; about {TripMinutes(seconds)} by rail from there{(option.EstimateKind == "schedule" ? " (schedule estimate)" : "")}";
+            return $"- {name}: {option.SurfaceMeters} m{rail}.";
+        });
+        var heading = destination is null
+            ? $"Closest stations with verified step-free access, by modeled road distance from {station}:"
+            : $"Closest verified step-free trips to {destination}, by modeled road distance from {station}:";
+        return $"{summary}\n\n{heading}\n{string.Join('\n', alternatives)}\n\n" +
+            "These distances do not verify a step-free walking route. If you need accessible transit, you can get a free on-demand ride to a station.";
     }
 
     private static string PassengerArrivals(StationBoard board, string station)
@@ -313,6 +378,25 @@ internal abstract class AssistantToolRegistry
                 capture.Arrivals = board;
                 return Serialize(board);
             }
+            case "check_step_free_access":
+            {
+                var lookup = StationResolution(RequiredString(arguments, "station"));
+                if (lookup.Station is null)
+                {
+                    Clarify(lookup, capture);
+                    return Serialize(lookup);
+                }
+                try
+                {
+                    capture.StationAccess = await CheckStepFreeAsync(new(lookup.Station.Id), cancellationToken);
+                    return Serialize(capture.StationAccess);
+                }
+                catch (ToolServiceException)
+                {
+                    capture.Clarification = "I couldn't verify current step-free access. Please check again before travelling.";
+                    throw;
+                }
+            }
             case "plan_journey":
             {
                 var suppliedOrigin = OptionalString(arguments, "origin");
@@ -346,10 +430,12 @@ internal abstract class AssistantToolRegistry
 
                 var askReturnTime = IsPassenger &&
                     (OptionalBool(arguments, "askReturnTime") == true ||
-                     capture.TripTiming is { RoundTrip: true, ReturnTime: null });
+                     capture.TripTiming is { RoundTrip: true, ReturnTime: null } ||
+                     capture.ReuseTripContext && capture.JourneyContext?.AwaitingReturnTime == true);
                 var pairedReturnTime = capture.TripTiming?.ReturnTime ??
                     OptionalOffsetDateTime(arguments, "returnTime", capture.ViewerTimeZone);
-                var context = IsPassenger && suppliedOrigin is not null && suppliedDestination is not null
+                var context = IsPassenger && suppliedOrigin is not null && suppliedDestination is not null &&
+                    !capture.ReuseTripContext
                     ? null : capture.JourneyContext is null ? null : new JourneyRequest(
                         capture.JourneyContext.Origin,
                         capture.JourneyContext.Destination,
@@ -360,12 +446,9 @@ internal abstract class AssistantToolRegistry
                     : capture.TripTiming?.OutboundTime;
                 var request = BuildJourneyRequest(arguments, context, origin.Station.Id, destination.Station.Id,
                     capture.ViewerTimeZone, authoritativeDeparture);
-                var journey = await Services.PostAsync<JourneyRequest, JourneyResult>(
-                    "planner",
-                    "journeys",
-                    request,
-                    "Journey planner",
-                    cancellationToken);
+                if (IsPassenger && capture.AccessiblePreference is { } accessible)
+                    request = request with { Accessible = accessible };
+                var journey = await ReadJourneyAsync(request, capture, cancellationToken);
                 capture.Journey = journey;
                 if (IsPassenger)
                 {
@@ -377,18 +460,14 @@ internal abstract class AssistantToolRegistry
                             journey.Request.Origin,
                             journey.Request.Accessible,
                             returnTime);
-                        var returnJourney = await Services.PostAsync<JourneyRequest, JourneyResult>(
-                            "planner",
-                            "journeys",
-                            returnRequest,
-                            "Journey planner",
-                            cancellationToken);
+                        var returnJourney = await ReadJourneyAsync(returnRequest, capture, cancellationToken);
                         capture.Journey = returnJourney;
                         capture.RecordPassengerJourney(returnJourney, askReturnTime: false);
                         capture.SaveJourneyContext(journey, awaitingReturnTime: false);
                         return Serialize(new
                         {
                             journeys = new[] { journey, returnJourney },
+                            stepFree = capture.StepFreeChecks.Values,
                             viewerTimeZone = capture.ViewerTimeZone.Id,
                             localDepartures = new[]
                             {
@@ -407,6 +486,7 @@ internal abstract class AssistantToolRegistry
                 return Serialize(new
                 {
                     journey,
+                    stepFree = capture.StepFreeChecks.GetValueOrDefault(journey.Request),
                     viewerTimeZone = capture.ViewerTimeZone.Id,
                     localAsOf = capture.LocalTime(journey.AsOf),
                     localDeparture = capture.LocalTime(journey.Request.DepartureTime ?? journey.AsOf),
@@ -416,6 +496,29 @@ internal abstract class AssistantToolRegistry
             default:
                 throw new ToolInputException("The requested tool is not available.");
         }
+    }
+
+    private Task<StepFreeResult> CheckStepFreeAsync(StepFreeRequest request, CancellationToken cancellationToken) =>
+        Services.PostAsync<StepFreeRequest, StepFreeResult>("planner", "step-free", request, "Journey planner", cancellationToken);
+
+    private async Task<JourneyResult> ReadJourneyAsync(JourneyRequest request, AssistantCapture capture, CancellationToken cancellationToken)
+    {
+        if (!IsPassenger || !request.Accessible)
+            return await Services.PostAsync<JourneyRequest, JourneyResult>("planner", "journeys", request, "Journey planner", cancellationToken);
+
+        StepFreeResult check;
+        try
+        {
+            check = await CheckStepFreeAsync(new(request.Origin, request.Destination, request.DepartureTime), cancellationToken);
+        }
+        catch (ToolServiceException)
+        {
+            capture.Clarification = "I couldn't verify current step-free service. Please check again before travelling.";
+            throw;
+        }
+        capture.StepFreeChecks[request] = check;
+        return check.Journey ?? new JourneyResult(check.ScenarioId, check.Generation, check.Version, check.AsOf,
+            request, [], "Current step-free service could not be verified.");
     }
 
     protected async Task<string> CompareAsync(
@@ -750,10 +853,14 @@ internal static class ToolDefinitions
         """);
     private static readonly AssistantToolDefinition PlanPassengerJourney = Define(
         "plan_journey",
-        "Plan a real journey. Pass supplied station names as written; this tool resolves them. A new trip with both stations and no departure time leaves now. For a round trip with both times, include returnTime in this single call. Omit a station only when reusing the prior journey context.",
+        "Plan a real journey, including verified nearby alternatives if a step-free journey is blocked. Pass supplied station names as written; this tool resolves them. A new trip with both stations and no departure time leaves now. For a round trip with both times, include returnTime in this single call. Omit both stations when following up on the same trip without endpoint changes.",
         """
         {"type":"object","properties":{"origin":{"type":"string"},"destination":{"type":"string"},"accessible":{"type":"boolean"},"departureTime":{"type":"string","description":"ISO 8601 simulated departure time with the viewer-zone offset"},"returnTime":{"type":"string","description":"ISO 8601 return departure time with the viewer-zone offset, when supplied by the rider"},"askReturnTime":{"type":"boolean","description":"True for the outbound leg of a round trip when the rider has not given a return time."}},"additionalProperties":false}
         """);
+    private static readonly AssistantToolDefinition CheckStepFreeAccess = Define(
+        "check_step_free_access",
+        "Check current step-free station access and, when blocked, nearby accessible stations ranked by modeled road distance. Does not verify walking or an onward trip.",
+        """{"type":"object","properties":{"station":{"type":"string"}},"required":["station"],"additionalProperties":false}""");
     private static readonly AssistantToolDefinition CompareIntervention = Define(
         "compare_intervention",
         "Run the authoritative paired simulator comparison for a bounded service action. Use numeric amount for hold-train and set-headway; value is only for deploy-reserve and short-turn.",
@@ -768,7 +875,7 @@ internal static class ToolDefinitions
         ActionSchema(includeExplanation: false, includeReason: true));
 
     public static IReadOnlyList<AssistantToolDefinition> Passenger { get; } =
-        [ResolveStation, SystemStatus, GetArrivals, PlanPassengerJourney];
+        [ResolveStation, SystemStatus, GetArrivals, PlanPassengerJourney, CheckStepFreeAccess];
     public static IReadOnlyList<AssistantToolDefinition> Operator { get; } =
         [ResolveStation, SystemStatus, GetArrivals, DiagnoseStation, PlanJourney, CompareIntervention, ProposeAction, ExecuteAction];
 

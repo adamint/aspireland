@@ -443,6 +443,7 @@ it("uses rider language and links a stopped train to its line status and stops",
 
   expect(screen.getByRole("checkbox", { name: "Step-free trip" })).toBeTruthy();
   expect(screen.getByText("Choose “Step-free trip” to avoid stairs.")).toBeTruthy();
+  expect(screen.getByText(/free on-demand ride to a station/i)).toBeTruthy();
   expect(screen.getByText("No access alerts reported")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: /^blue-1,/ }));
 
