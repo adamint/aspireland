@@ -6,6 +6,88 @@ namespace MetroOps.Domain.Tests;
 
 public sealed class RoutingConsistencyTests
 {
+    [Fact]
+    public void Step_free_check_ranks_origins_by_surface_distance_and_verifies_onward_rail()
+    {
+        var world = Kernel.Create();
+        Assert.True(Apply(world, new("incident", "east-junction", "elevator-outage", 600)).Accepted);
+        var departure = world.SimTime.AddMinutes(10);
+
+        var result = Kernel.CheckStepFree(world, new("east-junction", "airport", departure), world.UpdatedAt);
+
+        Assert.Empty(result.Journey!.Options);
+        var block = Assert.Single(result.Blocks);
+        Assert.Equal(("east-junction", "origin", "elevator-outage"), (block.StationId, block.Role, block.Kind));
+        Assert.Equal([("union-terminal", 650), ("riverbank", 950), ("university", 1050)],
+            result.Alternatives.Select(option => (option.StationId, option.SurfaceMeters)));
+        Assert.DoesNotContain(Network.Definition.Lines.Where(line => line.Stations.Contains("east-junction")),
+            line => line.Stations.Contains("university"));
+        foreach (var alternative in result.Alternatives)
+        {
+            var verified = Kernel.Plan(world, new(alternative.StationId, "airport", true, departure));
+            Assert.Equal(verified.Options[0].TotalSeconds, alternative.TotalSeconds);
+            Assert.Equal(verified.Options[0].EstimateKind, alternative.EstimateKind);
+            Assert.Equal(verified.Version, result.Version);
+        }
+    }
+
+    [Theory]
+    [InlineData("airport", "destination")]
+    [InlineData("union-terminal", "transfer")]
+    public void Step_free_check_identifies_blocks_without_suggesting_unverified_options(string station, string role)
+    {
+        var world = Kernel.Create();
+        Assert.True(Apply(world, new("incident", station, "elevator-outage", 600)).Accepted);
+        if (role == "transfer")
+        {
+            Assert.True(Apply(world, new("incident", "airport>aerocity", "segment-closure", 600)).Accepted);
+            Assert.True(Apply(world, new("incident", "central-exchange", "elevator-outage", 600)).Accepted);
+        }
+
+        var result = Kernel.CheckStepFree(world, new("east-junction", "airport"), world.UpdatedAt);
+
+        Assert.Empty(result.Alternatives);
+        Assert.Contains(result.Blocks, block => block.StationId == station && block.Role == role &&
+            block.Kind == "elevator-outage");
+    }
+
+    [Fact]
+    public void Step_free_check_returns_direct_service_or_station_status_but_no_stale_evidence()
+    {
+        var world = Kernel.Create();
+        var direct = Kernel.CheckStepFree(world, new("east-junction", "airport"), world.UpdatedAt);
+        Assert.True(direct.Journey!.Options[0].Accessible);
+        Assert.Empty(direct.Blocks);
+        Assert.Empty(direct.Alternatives);
+
+        var station = Kernel.CheckStepFree(world, new("east-junction"), world.UpdatedAt);
+        Assert.True(station.OriginAccess!.Available);
+        Assert.Null(station.Journey);
+        Assert.Empty(station.Alternatives);
+
+        var stale = Kernel.CheckStepFree(world, new("east-junction", "airport"), world.UpdatedAt.AddMinutes(1));
+        Assert.True(stale.Stale);
+        Assert.Null(stale.OriginAccess);
+        Assert.Null(stale.Journey);
+        Assert.Empty(stale.Alternatives);
+    }
+
+    [Fact]
+    public void Standalone_step_free_lookup_skips_blocked_stations_and_uses_multilink_surface_distances()
+    {
+        var world = Kernel.Create();
+        foreach (var station in new[] { "east-junction", "union-terminal", "riverbank" })
+            Assert.True(Apply(world, new("incident", station, "elevator-outage", 600)).Accepted);
+
+        var result = Kernel.CheckStepFree(world, new("east-junction"), world.UpdatedAt);
+
+        Assert.False(result.OriginAccess!.Available);
+        Assert.Null(result.Journey);
+        Assert.Equal([("university", 1050), ("stadium", 1250), ("museum-quarter", 1580)],
+            result.Alternatives.Select(option => (option.StationId, option.SurfaceMeters)));
+        Assert.All(result.Alternatives, option => Assert.Null(option.TotalSeconds));
+    }
+
     [Theory]
     [InlineData("station-closure")]
     [InlineData("platform-closure")]

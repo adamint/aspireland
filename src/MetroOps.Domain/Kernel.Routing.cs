@@ -17,7 +17,7 @@ public static partial class Kernel
         {
             return Journey(world, request, [], "Origin or destination is unknown or ambiguous.");
         }
-        if (origin == destination)
+        if (origin == destination && !request.Accessible)
         {
             var time = request.DepartureTime ?? world.SimTime;
             return Journey(world, request,
@@ -35,6 +35,17 @@ public static partial class Kernel
         if (HasRestriction(world, "station-closure", origin) || HasRestriction(world, "station-closure", destination))
         {
             return Journey(world, request, [], "Origin or destination is closed.");
+        }
+        if (origin == destination)
+        {
+            if (!StepFreeAccess(world, origin).Available)
+                return Journey(world, request, [], "Step-free access is unavailable at this station.");
+            var time = request.DepartureTime ?? world.SimTime;
+            return Journey(world, request,
+            [
+                new Itinerary { Label = "Accessible", Accessible = true, ArrivesAt = time,
+                    EstimateKind = time > world.SimTime ? "schedule" : "live" }
+            ]);
         }
 
         var departure = request.DepartureTime ?? world.SimTime;
@@ -74,6 +85,72 @@ public static partial class Kernel
         }
 
         return Journey(world, request, options);
+    }
+
+    public static StepFreeResult CheckStepFree(WorldState world, StepFreeRequest request, DateTimeOffset now)
+    {
+        var result = new StepFreeResult(world.ScenarioId, world.Generation, world.Version, world.SimTime,
+            now - world.UpdatedAt > TimeSpan.FromSeconds(10), null, null, [], []);
+        if (result.Stale) return result;
+
+        var origin = Network.Resolve(request.Origin);
+        var destination = request.Destination is null ? null : Network.Resolve(request.Destination);
+        if (origin is null || (request.Destination is not null && destination is null))
+            return result with { Error = "Origin or destination is unknown or ambiguous." };
+
+        var originAccess = StepFreeAccess(world, origin);
+        result = result with { OriginAccess = originAccess };
+        if (destination is not null)
+        {
+            var journey = Plan(world, new(origin, destination, true, request.DepartureTime));
+            result = result with { Journey = journey };
+            if (journey.Options.Count > 0) return result;
+        }
+        else if (originAccess.Available)
+        {
+            return result;
+        }
+
+        if (originAccess.Restriction is { } originBlock)
+            result.Blocks.Add(new(origin, "origin", originBlock));
+        if (destination is not null && StepFreeAccess(world, destination).Restriction is { } destinationBlock)
+        {
+            if (origin != destination) result.Blocks.Add(new(destination, "destination", destinationBlock));
+            return result;
+        }
+        if (destination is not null && originAccess.Available)
+        {
+            // Report transfer faults on otherwise usable rail paths, not outages on unrelated stations.
+            foreach (var station in RidePaths(world, origin, destination, false)
+                .SelectMany(path => path.Skip(1).Select(ride => ride.From))
+                .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))
+            {
+                if (StepFreeAccess(world, station).Restriction is { } restriction)
+                    result.Blocks.Add(new(station, "transfer", restriction));
+            }
+        }
+
+        foreach (var (station, meters) in SurfaceNetwork.Nearest(origin))
+        {
+            if (station == destination || !StepFreeAccess(world, station).Available) continue;
+            Itinerary? option = null;
+            if (destination is not null)
+            {
+                option = Plan(world, new(station, destination, true, request.DepartureTime)).Options.FirstOrDefault();
+                if (option is null) continue;
+            }
+            result.Alternatives.Add(new(station, meters, option?.TotalSeconds, option?.EstimateKind));
+            if (result.Alternatives.Count == 3) break;
+        }
+        return result;
+    }
+
+    private static StepFreeStationAccess StepFreeAccess(WorldState world, string station)
+    {
+        var restriction = HasRestriction(world, "station-closure", station) ? "station-closure" :
+            HasRestriction(world, "platform-closure", station) ? "platform-closure" :
+            ElevatorUnavailable(world, station) ? "elevator-outage" : null;
+        return new(station, restriction is null, restriction);
     }
 
     public static StationBoard Board(WorldState world, string stationId)

@@ -196,6 +196,13 @@ public sealed class Itinerary
 }
 public sealed record JourneyResult(string ScenarioId, int Generation, long Version, DateTimeOffset AsOf,
     JourneyRequest Request, List<Itinerary> Options, string? Error = null);
+public sealed record StepFreeRequest(string Origin, string? Destination = null, DateTimeOffset? DepartureTime = null);
+public sealed record StepFreeStationAccess(string StationId, bool Available, string? Restriction);
+public sealed record StepFreeBlock(string StationId, string Role, string Kind);
+public sealed record StepFreeAlternative(string StationId, int SurfaceMeters, double? TotalSeconds, string? EstimateKind);
+public sealed record StepFreeResult(string ScenarioId, int Generation, long Version, DateTimeOffset AsOf, bool Stale,
+    StepFreeStationAccess? OriginAccess, JourneyResult? Journey, List<StepFreeBlock> Blocks,
+    List<StepFreeAlternative> Alternatives, string? Error = null);
 public sealed record Arrival(string TrainId, string Line, string Service, string Platform, string Destination,
     double? Seconds, string PredictionKind, string Status, int Load, int Capacity);
 public sealed record StationBoard(string StationId, string ScenarioId, int Generation, DateTimeOffset AsOf,
