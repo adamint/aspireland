@@ -11,15 +11,16 @@ Train movement, outages, and journey times follow the simulation clock.
 ## Run it locally
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) **10.0.404**
-  (see [`global.json`](global.json)) and the Aspire CLI **17.0.0**, pinned in
-  [`dotnet-tools.json`](dotnet-tools.json).
+  (see [`global.json`](global.json)) and the standalone
+  [Aspire CLI](https://aspire.dev/get-started/install-cli/) **17.0.0**.
 - Docker Engine or Docker Desktop, running. Aspire starts Postgres, RabbitMQ,
   and Redis for you.
 - [Node.js](https://nodejs.org/) **24 LTS** with npm, and
   [`uv`](https://docs.astral.sh/uv/getting-started/installation/) with Python
   **3.13** (`uv python install 3.13`).
 
-From the clone, use its physical path. By default, Aspire names the Postgres
+From the clone, use its physical path. Check that `aspire --version` reports
+17.0.0 before starting. By default, Aspire names the Postgres
 volume from the AppHost path, so worktrees don't share it. To reuse the old
 default volume, set `MetroOps__PostgresVolume=aspireland-metroops-postgres`.
 Don't share an explicit volume name across running instances; `--isolated`
@@ -27,18 +28,16 @@ doesn't change it.
 
 ```sh
 cd -P .
-dotnet tool restore
-dotnet aspire --version
+aspire --version
 npm ci --prefix web
-dotnet aspire start --isolated --non-interactive
-dotnet aspire wait operations-web --timeout 180 --non-interactive
-dotnet aspire wait passenger-web --timeout 180 --non-interactive
-dotnet aspire describe --non-interactive
+aspire start --isolated --non-interactive
+aspire wait operations-web --timeout 180 --non-interactive
+aspire wait passenger-web --timeout 180 --non-interactive
+aspire describe --non-interactive
 ```
 
-Use `dotnet aspire` from this clone so a different machine-wide CLI cannot
-select a preview release. The AppHost and core integrations are pinned to GA
-17.0.0. The optional `Aspire.Hosting.Foundry` and
+The AppHost and core integrations are pinned to GA 17.0.0. The optional
+`Aspire.Hosting.Foundry` and
 `Aspire.Azure.AI.Extensions.OpenAI` integrations only ship as
 `17.0.0-preview.1.26567.5` in that release train; those two packages remain
 preview. Foundry stays off unless explicitly enabled.
@@ -75,7 +74,7 @@ simulation instants; watch the clock and passenger demand in Dispatch after
 switching. **Trigger random service alert** opens one ordinary audited alert
 without resetting the scenario.
 
-`dotnet aspire stop --non-interactive` stops the instance, not its database volume.
+`aspire stop --non-interactive` stops the instance, not its database volume.
 See [the runbook](docs/deploy.md#keep-the-world) before relying on a saved world.
 
 ## Try the loop
@@ -103,7 +102,7 @@ uv run --python 3.13 tests/smoke.py \
   --operations "$OPERATIONS_WEB_URL" --passenger "$PASSENGER_WEB_URL"
 ```
 
-Set both variables from `dotnet aspire describe`. Allow up to 20 minutes for the
+Set both variables from `aspire describe`. Allow up to 20 minutes for the
 turnback check; achieved clock speed depends on the host. `--voice` is opt-in
 and sends real, billable requests to Foundry.
 

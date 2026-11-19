@@ -39,10 +39,11 @@ password before first start and keep it outside the checkout. The following
 initializes a new demo account's configuration; don't regenerate the file on
 restart or when pointing at an existing volume.
 
+Check that the standalone `aspire --version` reports 17.0.0 before starting.
+
 ```sh
 cd -P .
-dotnet tool restore
-dotnet aspire --version
+aspire --version
 export MetroOps__PostgresVolume=metroops-demo-postgres
 (umask 077; mkdir -p "$HOME/.config/metroops"
  set -C; openssl rand -hex 32 > "$HOME/.config/metroops/postgres-password")
@@ -51,15 +52,15 @@ npm ci --prefix web
 npm run build:conference --prefix web
 env MetroOps__ProvisionFoundry=false \
   "Parameters__postgres-password=$(cat "$HOME/.config/metroops/postgres-password")" \
-  dotnet aspire start --launch-profile demo --non-interactive
-dotnet aspire wait passenger-api --timeout 180 --non-interactive
-dotnet aspire wait operations-web --timeout 180 --non-interactive
-dotnet aspire describe --non-interactive
+  aspire start --launch-profile demo --non-interactive
+aspire wait passenger-api --timeout 180 --non-interactive
+aspire wait operations-web --timeout 180 --non-interactive
+aspire describe --non-interactive
 ```
 
 Use the `demo` profile for only one instance on the host. It keeps the dashboard
 at `https://localhost:17380`, Rider at `http://127.0.0.1:17381`, and Dispatch at
-`http://127.0.0.1:17382`. Use `dotnet aspire start --isolated --non-interactive`
+`http://127.0.0.1:17382`. Use `aspire start --isolated --non-interactive`
 without the `demo` profile in other worktrees.
 
 Start the attendee origin in a private terminal. The `demo` profile keeps the
@@ -191,16 +192,15 @@ revision against that volume. Don't delete the original volume to make room.
 ## Stop the demo
 
 Stop Caddy (or close public ingress), then stop the attendee process and run
-`dotnet aspire stop --non-interactive` from the demo clone. For foreground processes,
+`aspire stop --non-interactive` from the demo clone. For foreground processes,
 use Ctrl+C. Don't delete the database volume.
 
 ## Upgrade an existing world
 
 ### Upgrade to Aspire 17
 
-Schedule a maintenance window; don't restart a live talk. Restore the pinned
-CLI with `dotnet tool restore` in the release clone and check that
-`dotnet aspire --version` reports 17.0.0.
+Schedule a maintenance window; don't restart a live talk. In the release clone,
+check that `aspire --version` reports 17.0.0.
 
 Stop the existing writers and back up the retained database as above. Stop
 only that AppHost, using its explicit `--apphost` path. Never run two graphs
@@ -235,7 +235,7 @@ outbox, don't restart just one writer against a mix of old and new processes.
    `scenario`, `control`, `dispatch` and `incidents`. Keep all five stopped
    while you back up Postgres. Archive older events separately if you need them.
 2. Deploy the new revision. Rebuild and start **`scenario` first**, leaving
-   the other four stopped. Wait for `dotnet aspire wait scenario --non-interactive`
+   the other four stopped. Wait for `aspire wait scenario --non-interactive`
    to report healthy. Scenario migrates the schema, prunes history and
    rebuilds the pending passenger snapshot from the checkpoint without
    resetting the world. If restarting the whole AppHost, use

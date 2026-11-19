@@ -97,10 +97,10 @@ Launch profiles do not open a browser automatically.
 The NuGet source configuration and useful Aspire VS Code recommendation moved
 to the root too; the obsolete AppHost directory is gone.
 
-Run `dotnet tool restore`, then
-`dotnet aspire start --apphost apphost.cs --isolated --non-interactive` from the
-root. When several apps are running, stop this one with
-`dotnet aspire stop --apphost apphost.cs --non-interactive`, never `--all`.
+Check that `aspire --version` reports 17.0.0, then run
+`aspire start --apphost apphost.cs --isolated --non-interactive` from the root.
+When several apps are running, stop this one with
+`aspire stop --apphost apphost.cs --non-interactive`, never `--all`.
 
 The relocated app resumed the previous scenario,
 generation 10, from the same volume; its version advanced past 50718.
