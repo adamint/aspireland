@@ -38,23 +38,32 @@ foreach (var name in Environment.GetEnvironmentVariables().Keys.Cast<string>())
 const string demoCommandClient = "demo-read";
 builder.Services.AddHttpClient(demoCommandClient, client => client.Timeout = TimeSpan.FromSeconds(5));
 
+#pragma warning disable ASPIRERESOURCETRAITS001 // WithTags is experimental in Aspire 17.0.0.
+
 var serviceKey = builder.AddParameter("service-key",
-    () => builder.Configuration["Parameters:service-key"] ?? Convert.ToHexString(RandomNumberGenerator.GetBytes(32)), secret: true);
+    () => builder.Configuration["Parameters:service-key"] ?? Convert.ToHexString(RandomNumberGenerator.GetBytes(32)), secret: true)
+    .WithTags("config");
 var workerKey = builder.AddParameter("worker-key",
-    () => builder.Configuration["Parameters:worker-key"] ?? Convert.ToHexString(RandomNumberGenerator.GetBytes(32)), secret: true);
+    () => builder.Configuration["Parameters:worker-key"] ?? Convert.ToHexString(RandomNumberGenerator.GetBytes(32)), secret: true)
+    .WithTags("config");
 var operatorKey = builder.AddParameter("operator-key",
-    () => builder.Configuration["Parameters:operator-key"] ?? Convert.ToHexString(RandomNumberGenerator.GetBytes(32)), secret: true);
+    () => builder.Configuration["Parameters:operator-key"] ?? Convert.ToHexString(RandomNumberGenerator.GetBytes(32)), secret: true)
+    .WithTags("config");
 var agentKey = builder.AddParameter("agent-key",
-    () => builder.Configuration["Parameters:agent-key"] ?? Convert.ToHexString(RandomNumberGenerator.GetBytes(32)), secret: true);
+    () => builder.Configuration["Parameters:agent-key"] ?? Convert.ToHexString(RandomNumberGenerator.GetBytes(32)), secret: true)
+    .WithTags("config");
 
 var postgres = builder.AddPostgres("postgres")
+    .WithTags("infrastructure")
     .WithDataVolume(builder.Configuration["MetroOps:PostgresVolume"] ?? "aspireland-metroops-postgres");
-var database = postgres.AddDatabase("metro");
-var broker = builder.AddRabbitMQ("events");
-var cache = builder.AddRedis("cache");
+var database = postgres.AddDatabase("metro").WithTags("infrastructure");
+var broker = builder.AddRabbitMQ("events").WithTags("infrastructure");
+var cache = builder.AddRedis("cache").WithTags("infrastructure");
 var demand = builder.AddPythonApp("demand", "python/demand", "main.py")
+    .WithTags("simulation")
     .WithUv().WithHttpEndpoint(env: "PORT").WithHttpHealthCheck("/health");
 var analytics = builder.AddPythonApp("analytics", "python/analytics", "main.py")
+    .WithTags("simulation")
     .WithUv().WithHttpEndpoint(env: "PORT").WithHttpHealthCheck("/health")
     .WithHttpCommand("/inventory", "Check passenger inventory", endpointName: "http", commandName: "check-passenger-inventory",
         commandOptions: new HttpCommandOptions
@@ -63,6 +72,7 @@ var analytics = builder.AddPythonApp("analytics", "python/analytics", "main.py")
         });
 
 var scenario = builder.AddDotnetProject("scenario", "src/MetroOps.Scenario/MetroOps.Scenario.csproj")
+    .WithTags("simulation")
     .WithHttpEndpoint().WithHttpHealthCheck("/health")
     .WithReference(database).WithReference(broker).WithReference(demand)
     .WithEnvironment("SERVICE_KEY", serviceKey)
@@ -70,21 +80,26 @@ var scenario = builder.AddDotnetProject("scenario", "src/MetroOps.Scenario/Metro
 analytics.WithEnvironment("SCENARIO_URL", scenario.GetEndpoint("http")).WaitFor(scenario);
 
 var control = builder.AddDotnetProject("control", "src/MetroOps.Control/MetroOps.Control.csproj")
+    .WithTags("fleet")
     .WithHttpEndpoint().WithHttpHealthCheck("/health")
     .WithReference(database).WithEnvironment("WORKER_KEY", workerKey)
     .WaitFor(database).WaitFor(scenario);
 var dispatch = builder.AddDotnetProject("dispatch", "src/MetroOps.Dispatch/MetroOps.Dispatch.csproj")
+    .WithTags("services")
     .WithHttpEndpoint().WithHttpHealthCheck("/health")
     .WithReference(database).WithEnvironment("SERVICE_KEY", serviceKey).WithEnvironment("AGENT_KEY", agentKey)
     .WaitFor(database).WaitFor(scenario);
 var incidents = builder.AddDotnetProject("incidents", "src/MetroOps.Incidents/MetroOps.Incidents.csproj")
+    .WithTags("services")
     .WithHttpEndpoint().WithHttpHealthCheck("/health")
     .WithReference(database).WithEnvironment("SERVICE_KEY", serviceKey)
     .WaitFor(database).WaitFor(scenario);
 var planner = builder.AddDotnetProject("planner", "src/MetroOps.Planner/MetroOps.Planner.csproj")
+    .WithTags("services")
     .WithHttpEndpoint().WithHttpHealthCheck("/health")
     .WithReference(scenario).WaitFor(scenario);
 var information = builder.AddDotnetProject("information", "src/MetroOps.Information/MetroOps.Information.csproj")
+    .WithTags("services")
     .WithHttpEndpoint().WithHttpHealthCheck("/health")
     .WithReference(scenario).WithReference(broker).WithReference(cache)
     .WaitFor(scenario).WaitFor(broker).WaitFor(cache)
@@ -94,18 +109,22 @@ var information = builder.AddDotnetProject("information", "src/MetroOps.Informat
             Method = HttpMethod.Get, HttpClientName = demoCommandClient, ResultMode = HttpCommandResultMode.Json
         });
 var ai = builder.AddDotnetProject("ai-operations", "src/MetroOps.AiHost/MetroOps.AiHost.csproj")
+    .WithTags("ai")
     .WithHttpEndpoint().WithHttpHealthCheck("/health")
     .WithReference(scenario).WithReference(planner).WithReference(information).WithReference(dispatch)
     .WithEnvironment("AGENT_KEY", agentKey).WithEnvironment("OPERATOR_KEY", operatorKey)
     .WaitFor(scenario).WaitFor(planner).WaitFor(information).WaitFor(dispatch);
 if (builder.Configuration.GetValue("MetroOps:ProvisionFoundry", false))
 {
-    var foundry = builder.AddFoundry("aspireland-foundry");
+    var foundry = builder.AddFoundry("aspireland-foundry").WithTags("ai");
     var chat = foundry.AddDeployment("chat", FoundryModel.OpenAI.Gpt5Mini)
+        .WithTags("ai")
         .WithProperties(deployment => deployment.SkuName = "GlobalStandard");
     var transcription = foundry.AddDeployment("transcription", FoundryModel.OpenAI.Gpt4oMiniTranscribe)
+        .WithTags("ai")
         .WithProperties(deployment => deployment.SkuName = "GlobalStandard");
     var speech = foundry.AddDeployment("speech", FoundryModel.OpenAI.Tts)
+        .WithTags("ai")
         .WithProperties(deployment => deployment.SkuName = "Standard");
     ai.WithReference(chat).WithReference(transcription).WithReference(speech)
         .WithEnvironment("AZURE_TENANT_ID", builder.Configuration["Azure:TenantId"])
@@ -115,11 +134,12 @@ else
 {
     foreach (var connection in new[] { "chat", "transcription", "speech" })
         if (!string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString(connection)))
-            ai.WithReference(builder.AddConnectionString(connection));
+            ai.WithReference(builder.AddConnectionString(connection).WithTags("ai", "config"));
     ai.WithEnvironment("AZURE_TENANT_ID", builder.Configuration["Azure:TenantId"]);
 }
 
 var operations = builder.AddDotnetProject("operations-api", "src/MetroOps.OperationsApi/MetroOps.OperationsApi.csproj")
+    .WithTags("services")
     .WithHttpEndpoint().WithHttpHealthCheck("/health")
     .WithReference(scenario).WithReference(planner).WithReference(information).WithReference(analytics)
     .WithReference(ai).WithReference(dispatch).WithReference(incidents)
@@ -258,6 +278,7 @@ operations.WithCommand("trigger-random-service-alert", "Trigger random service a
 });
 
 var passenger = builder.AddDotnetProject("passenger-api", "src/MetroOps.PassengerApi/MetroOps.PassengerApi.csproj")
+    .WithTags("services")
     .WithHttpEndpoint().WithHttpHealthCheck("/health")
     .WithReference(planner).WithReference(information).WithReference(analytics)
     .WithReference(ai)
@@ -266,6 +287,7 @@ var passenger = builder.AddDotnetProject("passenger-api", "src/MetroOps.Passenge
 foreach (var train in Fleet.Trains)
 {
     builder.AddDotnetProject($"train-{train.Id}", "src/MetroOps.TrainWorker/MetroOps.TrainWorker.csproj")
+        .WithTags("fleet")
         .WithHttpEndpoint().WithHttpHealthCheck("/health")
         .WithEnvironment("TRAIN_ID", train.Id).WithEnvironment("WORKER_KEY", workerKey)
         .WithReference(control)
@@ -274,9 +296,36 @@ foreach (var train in Fleet.Trains)
 
 builder.AddViteApp("operations-web", "web").WithEnvironment("VITE_SITE", "operations")
     .WithEnvironment("API_URL", operations.GetEndpoint("http")).WithEnvironment("OPERATOR_KEY", operatorKey)
-    .WaitFor(operations).WithExternalHttpEndpoints();
+    .WaitFor(operations).WithExternalHttpEndpoints()
+    .WithUrlForEndpoint("http", url => url.DisplayText = "Dispatch console")
+    .WithTags("interactive");
 builder.AddViteApp("passenger-web", "web").WithEnvironment("VITE_SITE", "passenger")
     .WithEnvironment("API_URL", passenger.GetEndpoint("http"))
-    .WaitFor(passenger).WithExternalHttpEndpoints();
+    .WaitFor(passenger).WithExternalHttpEndpoints()
+    .WithUrlForEndpoint("http", url => url.DisplayText = "Rider site")
+    .WithTags("interactive");
+
+var attendeeUrl = builder.Configuration["MetroOps:AttendeeUrl"];
+if (!string.IsNullOrWhiteSpace(attendeeUrl))
+{
+    if (Uri.TryCreate(attendeeUrl, UriKind.Absolute, out var attendeeUri) &&
+        attendeeUri.Scheme == Uri.UriSchemeHttps && attendeeUri.Host.Length > 0 &&
+        attendeeUri.UserInfo.Length == 0 && attendeeUri.Query.Length == 0 && attendeeUri.Fragment.Length == 0)
+    {
+        builder.AddExternalService("attendee-site", attendeeUri)
+            .WithUrls(context =>
+            {
+                foreach (var url in context.Urls)
+                    url.DisplayText = "Attendee site (Dev Tunnel)";
+            })
+            .WithTags("interactive");
+    }
+    else
+    {
+        Console.Error.WriteLine("Skipping the attendee site link: MetroOps:AttendeeUrl must be an absolute HTTPS URL without credentials, a query, or a fragment.");
+    }
+}
+
+#pragma warning restore ASPIRERESOURCETRAITS001
 
 builder.Build().Run();

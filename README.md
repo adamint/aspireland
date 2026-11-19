@@ -42,8 +42,22 @@ select a preview release. The AppHost and core integrations are pinned to GA
 `17.0.0-preview.1.26567.5` in that release train; those two packages remain
 preview. Foundry stays off unless explicitly enabled.
 
-Open the two web URLs from `dotnet aspire describe`. Ports change between starts.
-Use the Aspire Dashboard to follow a request across the graph or run
+Open **Rider site** on `passenger-web` or **Dispatch console** on
+`operations-web` in the Aspire Dashboard's Resources view. Local ports change
+between starts.
+
+If you're already hosting the attendee site through a Dev Tunnel, set
+`MetroOps__AttendeeUrl` (configuration key `MetroOps:AttendeeUrl`) to its HTTPS
+URL before starting the AppHost. Use a URL without credentials, a query, or
+a fragment. The `attendee-site` resource then links to **Attendee site (Dev Tunnel)**.
+This only adds a dashboard link; it doesn't create a tunnel or change access.
+
+The AppHost tags all three sites `interactive`. The other tags are `simulation`,
+`fleet`, `services`, `ai`, `infrastructure`, and `config`. Tags are experimental
+metadata in Aspire 17.0.0; the Resources view doesn't have a tag filter in that
+version.
+
+Use the dashboard to follow a request across the graph or run
 **Check passenger inventory** on `analytics` and **Inspect Airport arrivals**
 on `information`.
 
