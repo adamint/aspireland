@@ -12,7 +12,11 @@ internal sealed record PassengerAccessIntent(bool? Accessible, string? Tool = nu
     private const string AccessTerms = @"\b(?:" + StepFree + @"|accessible|accessibility|wheelchair|no stairs|avoid stairs|without stairs)\b";
     private static readonly Regex Access = new(AccessTerms, MatchOptions);
     private static readonly Regex OptOut = new(
-        @"\b(?:stairs (?:are|is) (?:ok|okay|fine)|(?:don['’]t|do not) need (?:a )?(?:step[- ]free|accessible)|(?:no|without) (?:an? )?(?:accessibility requirement|step[- ]free requirement))\b", MatchOptions);
+        @"\b(?:stairs (?:are|is) (?:ok|okay|fine)|(?:don['’]t|do not) need (?:a )?(?:" + StepFree +
+        @"|accessible)|(?:no|without) (?:an? )?(?:accessibility requirement|" + StepFree + @" requirement))\b", MatchOptions);
+    private static readonly Regex Lift = new(@"\b(?:elevators?|lifts?)\b", MatchOptions);
+    private static readonly Regex AccessStatus = new(
+        @"\b(?:out|outages?|working|broken|closed|operating|available|unavailable|in service|down)\b", MatchOptions);
     private static readonly Regex Trip = new(@"\bfrom\s+([^?!.,\r\n]+?)\s+to\s+([^?!.,\r\n]+)[?!. ]*$", MatchOptions);
     private static readonly Regex TripWithDetails = new(@"\bfrom\s+[^?!\r\n]{1,160}?\s+to\s+\S", MatchOptions);
     private static readonly Regex NearestStation = new(
@@ -45,9 +49,12 @@ internal sealed record PassengerAccessIntent(bool? Accessible, string? Tool = nu
         var namesStation = Network.Definition.Stations.Any(s =>
             Regex.IsMatch(text, $@"\b{Regex.Escape(s.Name)}\b", MatchOptions));
         var trip = Trip.Match(text);
-        var acceptedOffer = previous is { Role: "assistant" } && (trip.Success || TripWithDetails.IsMatch(text)) &&
-            Offer.IsMatch(previous.Content);
-        if (trip.Success && (explicitAccess || acceptedOffer) && !TimeCue.IsMatch(text) &&
+        var followsAccessExchange = previous is { Role: "assistant" } && (trip.Success || TripWithDetails.IsMatch(text)) &&
+            (Offer.IsMatch(previous.Content) ||
+             request.History is { Count: >= 2 } history && history[^2] is { Role: "user", Content: var prior } &&
+             !OptOut.IsMatch(prior) && !TripWithDetails.IsMatch(prior) &&
+             (Access.IsMatch(prior) || Lift.IsMatch(prior) && AccessStatus.IsMatch(prior)));
+        if (trip.Success && (explicitAccess || followsAccessExchange) && !TimeCue.IsMatch(text) &&
             Network.Resolve(trip.Groups[1].Value) is { } origin &&
             Network.Resolve(trip.Groups[2].Value) is { } destination)
         {
@@ -68,6 +75,6 @@ internal sealed record PassengerAccessIntent(bool? Accessible, string? Tool = nu
             ? !namesStation && !continuing ? "Which station are you starting from?" :
                 "I couldn't verify which station is closest by modeled road distance."
             : null;
-        return new(explicitAccess || acceptedOffer ? true : null, MissingEvidenceText: missingEvidence);
+        return new(explicitAccess || followsAccessExchange ? true : null, MissingEvidenceText: missingEvidence);
     }
 }

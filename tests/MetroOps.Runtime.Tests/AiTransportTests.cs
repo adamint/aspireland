@@ -84,6 +84,61 @@ public sealed class AiTransportTests
     }
 
     [Theory]
+    [InlineData("outage", true)]
+    [InlineData("unrelated", false)]
+    [InlineData("intervening", false)]
+    [InlineData("previous trip", false)]
+    [InlineData("opt-out", false)]
+    public async Task Signal_uses_only_the_immediately_preceding_rider_access_exchange(string scenario, bool stepFree)
+    {
+        var world = Kernel.Create();
+        world.Incidents.Add(new() { Kind = "elevator-outage", Target = "east-junction", State = "active" });
+        List<ChatMessage> history =
+        [
+            new("user", "Which elevators are out right now?"),
+            new("assistant", "Current active elevator outages: East Junction — elevator outage. That's the only elevator incident showing.")
+        ];
+        if (scenario == "unrelated")
+            history = [new("user", "Which lines serve East Junction?"), new("assistant", "Blue and Amber serve East Junction.")];
+        if (scenario == "intervening")
+            history.AddRange([new("user", "What time is it?"), new("assistant", "It's 1 PM.")]);
+        if (scenario == "previous trip")
+            history = [new("user", "Plan a step-free trip from University to Southbank."), new("assistant", "Take Green to Southbank.")];
+        var message = scenario == "opt-out"
+            ? "I want to go from east junction to the airport. Stairs are fine."
+            : "I want to go from east junction to the airport";
+
+        using var serviceHttp = new HttpClient(new Handler(async (request, _) =>
+        {
+            var body = await request.Content!.ReadAsStringAsync();
+            if (stepFree)
+            {
+                Assert.Equal("/step-free", request.RequestUri!.AbsolutePath);
+                var input = JsonSerializer.Deserialize<StepFreeRequest>(body, Wire.Json)!;
+                Assert.Equal(new StepFreeRequest("east-junction", "airport"), input);
+                return JsonResponse(JsonSerializer.Serialize(Kernel.CheckStepFree(world, input, world.UpdatedAt), Wire.Json));
+            }
+            Assert.Equal("/journeys", request.RequestUri!.AbsolutePath);
+            var journey = JsonSerializer.Deserialize<JourneyRequest>(body, Wire.Json)!;
+            Assert.Equal(new JourneyRequest("east-junction", "airport"), journey);
+            return JsonResponse(JsonSerializer.Serialize(Kernel.Plan(world, journey), Wire.Json));
+        }));
+        var responses = new Queue<string>(
+        [
+            PlanCallResponse(new { origin = "east junction", destination = "airport", accessible = scenario == "opt-out" }),
+            TextResponse
+        ]);
+        using var modelHttp = new HttpClient(new Handler((_, _) => Task.FromResult(JsonResponse(responses.Dequeue()))));
+
+        var result = await Client(modelHttp).CompleteAsync(new(message, history), "",
+            new PassengerToolRegistry(new ProposalStore(), new ServiceJsonClient(serviceHttp)), CancellationToken.None);
+
+        Assert.Equal(stepFree, result.JourneyContext?.Accessible);
+        if (stepFree)
+            Assert.Contains("Union Terminal", result.Text);
+    }
+
+    [Theory]
     [InlineData("3 p.m.", true)]
     [InlineData("15:00", true)]
     [InlineData("3 p.m.", false)]
