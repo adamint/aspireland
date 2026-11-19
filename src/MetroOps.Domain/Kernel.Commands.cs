@@ -34,6 +34,7 @@ public static partial class Kernel
             "short-turn" => ShortTurn(world, action),
             "set-headway" => SetHeadway(world, action),
             "incident" => CreateIncident(world, action),
+            "random-incident" => CreateRandomIncident(world),
             "clear-incident" => ClearIncident(world, action),
             _ => Rejected(world, $"Unknown action '{action.Kind}'.")
         };

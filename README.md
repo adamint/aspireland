@@ -47,11 +47,13 @@ Use the Aspire Dashboard to follow a request across the graph or run
 **Check passenger inventory** on `analytics` and **Inspect Airport arrivals**
 on `information`.
 
-On `operations-api`, **Set simulation time** offers weekday morning rush,
-midday, evening rush, Saturday leisure, and quiet Sunday overnight. The
-picker uses New York time. Confirming starts a fresh scenario with the same
-seed for each preset and resets trains, riders, incidents, and dispatch
-settings. Watch the clock and passenger demand in Dispatch after switching.
+On `operations-api`, **Set simulation time** offers Morning rush, Weekday
+midday, Evening rush, Weekend leisure, and Quiet overnight. Confirming starts
+a fresh scenario with the same seed for each preset and resets trains, riders,
+incidents, and dispatch settings. The preset names map to fixed New York
+simulation instants; watch the clock and passenger demand in Dispatch after
+switching. **Trigger random service alert** opens one ordinary audited alert
+without resetting the scenario.
 
 `dotnet aspire stop --non-interactive` stops the instance, not its database volume.
 See [the runbook](docs/deploy.md#keep-the-world) before relying on a saved world.

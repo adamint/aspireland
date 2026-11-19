@@ -14,7 +14,7 @@ public static partial class Kernel
             .Select(g => new RiderQueue(g.Key.StationId, g.Key.State, g.Key.Accessible,
                 g.Sum(c => c.Count), g.Min(c => c.ReadyAt))).ToArray();
         var incidents = world.Incidents.Where(i => i.State == "active")
-            .Select(i => new RiderIncident(i.Id, i.Kind, i.Target, i.State, i.Description, i.StartedAt)).ToArray();
+            .Select(i => new RiderIncident(i.Id, i.Kind, i.Target, i.State, i.Description, i.StartedAt, i.EndsAt)).ToArray();
 
         return new RiderWorld(world.ScenarioId, world.Generation, world.Version, world.SimTime, world.UpdatedAt,
             world.Paused, world.Speed, trains, queues, incidents, RiderGrants(world), new Dictionary<string, double>(world.Headways));

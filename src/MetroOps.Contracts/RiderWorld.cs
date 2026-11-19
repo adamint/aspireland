@@ -24,7 +24,8 @@ public sealed record RiderWorld(
         }).ToList(),
         Incidents = Incidents.Select(i => new Incident
         {
-            Id = i.Id, Kind = i.Kind, Target = i.Target, State = i.State, Description = i.Description, StartedAt = i.StartedAt
+            Id = i.Id, Kind = i.Kind, Target = i.Target, State = i.State, Description = i.Description,
+            StartedAt = i.StartedAt, EndsAt = i.EndsAt
         }).ToList(),
         Grants = Grants.ToDictionary(entry => entry.Key, entry => new MovementGrant
         {
@@ -43,7 +44,8 @@ public sealed record RiderTrain(
 public sealed record RiderQueue(string StationId, string State, bool Accessible, int Count, DateTimeOffset ReadyAt);
 
 public sealed record RiderIncident(
-    string Id, string Kind, string Target, string State, string Description, DateTimeOffset StartedAt);
+    string Id, string Kind, string Target, string State, string Description, DateTimeOffset StartedAt,
+    DateTimeOffset? EndsAt = null);
 
 public sealed record RiderGrant(
     string Id, string TrainId, string From, string To, DateTimeOffset DepartsAt, DateTimeOffset ArrivesAt, bool Completed);

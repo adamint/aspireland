@@ -25,7 +25,7 @@ public static class OperationsRoutes
         app.MapPost("/api/actions", async (ActionRequest request, HttpContext context, ServiceClients clients, IConfiguration config, CancellationToken ct) =>
         {
             if (!Authorized(context, config)) return Results.Unauthorized();
-            var service = request.Action.Kind is "incident" or "clear-incident" ? "incidents" : "dispatch";
+            var service = request.Action.Kind is "incident" or "random-incident" or "clear-incident" ? "incidents" : "dispatch";
             var command = new CommandEnvelope(request.CommandId ?? Guid.NewGuid().ToString("N"), request.ScenarioId, request.Generation,
                 request.ExpectedVersion, "operator", request.Reason, request.Action);
             return Results.Ok(await clients.Post<CommandResult>(service, "/actions", command, ct, config["SERVICE_KEY"]));

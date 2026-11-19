@@ -550,17 +550,7 @@ public static partial class Kernel
                 minor ? $"Extended dwell on {train.Id}." : $"Door fault on {train.Id}.");
         }
 
-        foreach (var station in Network.Definition.Stations)
-        {
-            if (Sample(world, "equipment-failure-profile-2", station.Id, opportunity) >= multiplier / 24_000d) continue;
-            var minor = Sample(world, "equipment-failure-kind-2", station.Id, opportunity) < 0.6;
-            var kind = minor ? "circulation" : "elevator-outage";
-            if (HasRestriction(world, kind, station.Id)) continue;
-            var repair = Sample(world, "equipment-repair-profile-2", station.Id, opportunity);
-            var duration = minor ? 60 + (int)(repair * 180) : 300 + (int)(repair * 600);
-            OpenIncident(world, kind, station.Id, duration, "stochastic",
-                minor ? $"Circulation disruption at {station.Id}." : $"Elevator outage at {station.Id}.");
-        }
+        ProcessStochasticStationIncidents(world, opportunity, multiplier);
     }
 
     private static Incident OpenIncident(
