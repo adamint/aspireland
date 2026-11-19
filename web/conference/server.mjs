@@ -68,7 +68,7 @@ const journeyFields = {
   origin: stationId, destination: stationId, accessible: bool, departureTime: nullable(date),
 };
 const requestShape = pick(journeyFields);
-const chatContext = pick({
+const chatContextFields = pick({
   ...journeyFields,
   departureTime: nullable((value) => {
     date(value);
@@ -81,6 +81,17 @@ const chatContext = pick({
     return value;
   }),
 });
+const chatContext = (value) => {
+  const context = chatContextFields(value);
+  if (value.savedOutboundId !== undefined) {
+    context.savedOutboundId = nullable((id) => {
+      check(typeof id === "string" && id.length === 32 && /^[0-9a-f]{32}$/.test(id));
+      return id;
+    })(value.savedOutboundId);
+  }
+  if (value.awaitingReturnTime !== undefined) context.awaitingReturnTime = bool(value.awaitingReturnTime);
+  return context;
+};
 const chatText = (value) => {
   check(typeof value === "string" && value.length <= 8000 && value.trim().length > 0);
   return value;
@@ -103,7 +114,7 @@ function projectChatRequest(body) {
     check((history ?? []).reduce((total, entry) => total + entry.content.length, message.length) <= 32_000);
     let journeyContext = null;
     if (body.journeyContext != null) {
-      exact(body.journeyContext, ["origin", "destination", "accessible", "departureTime"]);
+      exact(body.journeyContext, ["origin", "destination", "accessible", "departureTime", "savedOutboundId", "awaitingReturnTime"]);
       journeyContext = chatContext(body.journeyContext);
     }
     const viewerTimeZone = body.viewerTimeZone ?? null;

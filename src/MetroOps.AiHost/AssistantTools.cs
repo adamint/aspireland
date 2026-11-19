@@ -12,6 +12,7 @@ internal sealed record AssistantToolDefinition(string Name, string Description, 
 internal sealed class AssistantCapture
 {
     private readonly List<JourneyResult> _passengerJourneys = [];
+    private readonly DateTimeOffset? _serviceTime;
     private bool _askReturnTime;
     public AiEndpoints.PassengerTripTiming? TripTiming { get; }
 
@@ -29,12 +30,14 @@ internal sealed class AssistantCapture
     public AssistantCapture(
         AssistantJourneyContext? journeyContext,
         TimeZoneInfo? viewerTimeZone = null,
-        AiEndpoints.PassengerTripTiming? tripTiming = null)
+        AiEndpoints.PassengerTripTiming? tripTiming = null,
+        DateTimeOffset? serviceTime = null)
     {
         JourneyContext = journeyContext;
         ViewerTimeZone = viewerTimeZone ?? TimeZoneInfo.Utc;
         TripTiming = tripTiming;
-        if (journeyContext is { SavedOutboundId: { } savedId } &&
+        _serviceTime = serviceTime;
+        if (journeyContext is { AwaitingReturnTime: true, SavedOutboundId: { } savedId } &&
             PassengerJourneyStore.TryGet(savedId, out var saved) &&
             saved.Request.Origin == journeyContext.Origin &&
             saved.Request.Destination == journeyContext.Destination)
@@ -57,7 +60,7 @@ internal sealed class AssistantCapture
 
     public void SaveJourneyContext(JourneyResult journey, bool awaitingReturnTime)
     {
-        var savedOutboundId = awaitingReturnTime ? PassengerJourneyStore.Add(journey) : JourneyContext?.SavedOutboundId;
+        var savedOutboundId = awaitingReturnTime ? PassengerJourneyStore.Add(journey) : null;
         JourneyContext = new(
             journey.Request.Origin,
             journey.Request.Destination,
@@ -86,7 +89,8 @@ internal sealed class AssistantCapture
             text = passenger && _passengerJourneys.Count > 0
                 ? string.Join("\n\n", _passengerJourneys.Select((journey, index) =>
                     DescribeJourney(journey, passenger: true,
-                        _passengerJourneys.Count > 1 || _askReturnTime ? index == 0 ? "Outbound" : "Return" : null)))
+                        _passengerJourneys.Count > 1 || _askReturnTime ? index == 0 ? "Outbound" : "Return" : null,
+                        index > 0 ? Departure(_passengerJourneys[0]) : null)))
                 : DescribeJourney(Journey, passenger);
             if (passenger && _askReturnTime && _passengerJourneys.Count == 1)
                 text += "\n\nWhat time would you like to head back?";
@@ -94,12 +98,14 @@ internal sealed class AssistantCapture
         return new AssistantResponse(text, Journey, Comparison, Proposal, Tools.Count > 0 ? Tools : null, JourneyContext, Arrivals);
     }
 
-    private string DescribeJourney(JourneyResult journey, bool passenger, string? label = null)
+    private static DateTimeOffset Departure(JourneyResult journey) => journey.Request.DepartureTime ?? journey.AsOf;
+
+    private string DescribeJourney(JourneyResult journey, bool passenger, string? label = null,
+        DateTimeOffset? outboundDeparture = null)
     {
         if (journey.Options.FirstOrDefault() is not { } itinerary)
             return journey.Error ?? "No journey is currently available between those stations.";
-        var departure = journey.Request.DepartureTime ?? journey.AsOf;
-        var localDeparture = TimeZoneInfo.ConvertTime(departure, ViewerTimeZone);
+        var localDeparture = TimeZoneInfo.ConvertTime(Departure(journey), ViewerTimeZone);
         var localArrival = TimeZoneInfo.ConvertTime(itinerary.ArrivesAt, ViewerTimeZone);
         var arrival = LocalPassengerTime(localArrival, localDeparture);
         var route = journey.Request.Accessible ? "step-free route" : "route";
@@ -110,7 +116,8 @@ internal sealed class AssistantCapture
         {
             var heading = label is null ? "" : $"**{label}**\n";
             var readinessLabel = journey.Request.Accessible ? "Ready for a step-free trip from" : "Ready to leave";
-            var readiness = $"- {readinessLabel} {Network.Station(journey.Request.Origin).Name}: {LocalPassengerTime(localDeparture, localDeparture)}.";
+            var reference = TimeZoneInfo.ConvertTime(outboundDeparture ?? _serviceTime ?? journey.AsOf, ViewerTimeZone);
+            var readiness = $"- {readinessLabel} {Network.Station(journey.Request.Origin).Name}: {LocalPassengerTime(localDeparture, reference)}.";
             var arrivalLine = $"- Approx. arrival at {Network.Station(journey.Request.Destination).Name}: {arrival} ({duration}).";
             return PassengerJourney(itinerary, $"{heading}{readiness}\n{arrivalLine}");
         }
@@ -138,17 +145,36 @@ internal sealed class AssistantCapture
 
     private static string PassengerJourney(Itinerary itinerary, string summary)
     {
-        var rides = itinerary.Legs.Where(leg => leg is { Kind: "ride", Line: not null }).Select((leg, index) =>
+        var rides = itinerary.Legs.Where(leg => leg is { Kind: "ride", Line: not null }).ToArray();
+        var directions = rides.Select((leg, index) =>
         {
-            var direction = leg.Destination is null ? "" : $" toward {Network.Station(leg.Destination).Name}";
+            var direction = leg.Destination is null || leg.Destination == leg.To
+                ? "" : $" toward {Network.Station(leg.Destination).Name}";
             var wait = leg.WaitSeconds > 0 ? $" (wait about {TripMinutes(leg.WaitSeconds)})" : "";
             var action = index == 0
                 ? $"At {Network.Station(leg.From).Name}, take"
-                : $"Transfer at {Network.Station(leg.From).Name} to";
+                : $"Transfer at {Network.Station(leg.From).Name}: take";
             return $"- {action} {Network.Line(leg.Line!).Name}{direction} to {Network.Station(leg.To).Name}{wait}.";
         });
-        var details = rides.Concat(itinerary.Warnings.Distinct().Select(warning => $"- {warning}")).ToArray();
+        var caveats = rides.SelectMany(leg => PassengerCaveats(itinerary, leg)).Distinct();
+        var details = directions.Concat(caveats.Select(caveat => $"- {caveat}")).ToArray();
         return details.Length == 0 ? summary : $"{summary}\n\n{string.Join('\n', details)}";
+    }
+
+    private static IEnumerable<string> PassengerCaveats(Itinerary itinerary, JourneyLeg leg)
+    {
+        var station = Network.Station(leg.From).Name;
+        // Match planner diagnostics for this ride, but never use their raw text as rider copy.
+        if (itinerary.Warnings.Any(warning =>
+            warning.StartsWith($"The {leg.Line} arrival at {leg.From} serving {leg.To} is uncertain;", StringComparison.Ordinal) ||
+            warning.StartsWith($"The {leg.From} live board is stale;", StringComparison.Ordinal)))
+            yield return $"The wait at {station} may vary.";
+        if (itinerary.Warnings.Any(warning =>
+            warning.StartsWith($"High {leg.Line} occupancy at {leg.From} ", StringComparison.Ordinal)))
+            yield return $"Trains may be crowded at {station}; you may need to wait for the next one.";
+        if (itinerary.Accessible && itinerary.Warnings.Any(warning =>
+            warning.StartsWith($"Restriction at {leg.From}: elevator-outage:", StringComparison.Ordinal)))
+            yield return $"A lift is out at {station}.";
     }
 
     private static string TripMinutes(double seconds)

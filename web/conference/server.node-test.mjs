@@ -410,6 +410,22 @@ test("projects configured capabilities and a real Passenger chat turn without le
   }
 });
 
+test("preserves the bounded saved outbound context from response to the next chat POST", async (t) => {
+  const saved = { ...journeyRequest, savedOutboundId: "0123456789abcdef0123456789abcdef", awaitingReturnTime: true };
+  const f = await aiFixture(t, {
+    assistant(_req, res) {
+      res.end(JSON.stringify({ text: "What time would you like to head back?", journeyContext: { ...saved, internal: secret } }));
+    },
+  });
+  const first = await postChat(f);
+  assert.equal(first.status, 200);
+  const { journeyContext } = JSON.parse(first.text);
+  assert.deepEqual(journeyContext, saved);
+  const second = await postChat(f, { ...chatRequest, message: "Around 3 p.m.", journeyContext });
+  assert.equal(second.status, 200);
+  assert.deepEqual(JSON.parse(f.requests.filter((req) => req.method === "POST")[1].body).journeyContext, saved);
+});
+
 test("still denies cross-site chat, voice and any other non-allowlisted routes with opt-in on", async (t) => {
   const f = await aiFixture(t);
   assert.equal((await postChat(f, chatRequest, { headers: { "Sec-Fetch-Site": "cross-site" } })).status, 403);
@@ -437,6 +453,9 @@ test("rejects malformed, oversized and control-bearing chat input without spendi
     [{ ...chatRequest, provider: secret }, "provider override"],
     [{ ...chatRequest, authorization: secret }, "client authority"],
     [{ ...chatRequest, journeyContext: { ...journeyRequest, scenarioId: "private" } }, "journey authority"],
+    [{ ...chatRequest, journeyContext: { ...journeyRequest, savedOutboundId: "a".repeat(33) } }, "opaque ID length"],
+    [{ ...chatRequest, journeyContext: { ...journeyRequest, savedOutboundId: "g".repeat(32) } }, "opaque ID format"],
+    [{ ...chatRequest, journeyContext: { ...journeyRequest, awaitingReturnTime: "true" } }, "awaiting return type"],
     [{ ...chatRequest, journeyContext: { ...journeyRequest, destination: "../clock" } }, "station ID"],
     [{ ...chatRequest, journeyContext: { ...journeyRequest, accessible: "true" } }, "accessibility type"],
     [{ ...chatRequest, journeyContext: { ...journeyRequest, departureTime: "tomorrow" } }, "departure type"],
@@ -456,6 +475,8 @@ test("rejects malformed, oversized and control-bearing chat input without spendi
 test("rejects invalid projected chat responses and never relays upstream errors or redirects", async (t) => {
   const responses = [
     (res) => res.end(JSON.stringify({ text: "Answer", journeyContext: { ...journeyRequest, destination: 42 } })),
+    (res) => res.end(JSON.stringify({ text: "Answer", journeyContext: { ...journeyRequest, savedOutboundId: secret } })),
+    (res) => res.end(JSON.stringify({ text: "Answer", journeyContext: { ...journeyRequest, awaitingReturnTime: 1 } })),
     (res) => res.end(JSON.stringify({ text: null })),
     (res) => res.end(JSON.stringify({ text: "Answer", extra: "x".repeat(65_536) })),
     (res) => { res.writeHead(302, { Location: "/private" }); res.end(secret); },

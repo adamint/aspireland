@@ -346,11 +346,9 @@ public static class AiEndpoints
         TimeZoneInfo viewerTimeZone)
     {
         if (serviceTime is null) return null;
-        var awaitingReturn = request.JourneyContext?.AwaitingReturnTime == true;
-        var roundTrip = awaitingReturn ||
-            request.Message.Contains("round trip", StringComparison.OrdinalIgnoreCase) ||
-            request.Message.Contains("round-trip", StringComparison.OrdinalIgnoreCase);
-        if (!roundTrip) return null;
+        var explicitRoundTrip = IsExplicitRoundTrip(request.Message);
+        var awaitingReturn = !explicitRoundTrip && request.JourneyContext?.AwaitingReturnTime == true;
+        if (!explicitRoundTrip && !awaitingReturn) return null;
 
         var parsedTimes = PassengerTimePattern.Matches(request.Message)
             .Select(match => (match.Index, Time: ParseTime(match)))
@@ -410,6 +408,10 @@ public static class AiEndpoints
         }
         return new(true, outboundTime, returnTime, warning);
     }
+
+    internal static bool IsExplicitRoundTrip(string message) =>
+        message.Contains("round trip", StringComparison.OrdinalIgnoreCase) ||
+        message.Contains("round-trip", StringComparison.OrdinalIgnoreCase);
 
     private static TimeOnly? ParseTime(Match match)
     {

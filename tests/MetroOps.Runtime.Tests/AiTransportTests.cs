@@ -196,9 +196,58 @@ public sealed class AiTransportTests
         Assert.Equal(new JourneyRequest("medical-center", "airport", DepartureTime: DateTimeOffset.Parse(expectedReturn)), requests[1]);
         Assert.Contains("Outbound", result.Text);
         Assert.Contains("Return", result.Text);
+        Assert.Contains("Ready to leave Airport: 10:30 AM.", result.Text);
+        Assert.Contains("Ready to leave Medical Center: 3:00 PM.", result.Text);
         Assert.DoesNotContain("What time", result.Text);
         Assert.DoesNotContain("simulat", result.Text, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("medical-center", result.Text);
+    }
+
+    [Fact]
+    public async Task SignalStartsANewExplicitRoundTripDespiteAPendingReturn()
+    {
+        var serviceTime = DateTimeOffset.Parse("2026-11-18T08:00:00Z");
+        var oldTrip = new JourneyResult("test", 1, 1, serviceTime, new("airport", "medical-center"),
+            [new() { ArrivesAt = serviceTime.AddMinutes(30), TotalSeconds = 1800 }]);
+        var oldContext = new AssistantJourneyContext("airport", "medical-center", false, serviceTime,
+            PassengerJourneyStore.Add(oldTrip), AwaitingReturnTime: true);
+        var toolCall = JsonSerializer.Serialize(new
+        {
+            id = "resp-new-trip", @object = "response", created_at = 1, model = "gpt-5-mini", status = "completed",
+            output = new[] { new { id = "fc-new-trip", type = "function_call", status = "completed",
+                call_id = "new-trip", name = "plan_journey",
+                arguments = """{"origin":"university","destination":"southbank","askReturnTime":true}""" } }
+        });
+        var responses = new Queue<string>([toolCall, TextResponse]);
+        using var modelHttp = new HttpClient(new Handler((_, _) =>
+            Task.FromResult(JsonResponse(responses.Dequeue()))));
+        var requests = new List<JourneyRequest>();
+        using var serviceHttp = new HttpClient(new Handler(async (request, _) =>
+        {
+            var trip = JsonSerializer.Deserialize<JourneyRequest>(await request.Content!.ReadAsStringAsync(), Wire.Json)!;
+            requests.Add(trip);
+            return JsonResponse(JsonSerializer.Serialize(
+                new JourneyResult("test", 1, 1, serviceTime, trip,
+                    [new() { ArrivesAt = (trip.DepartureTime ?? serviceTime).AddMinutes(30), TotalSeconds = 1800 }]), Wire.Json));
+        }));
+        var zone = AiEndpoints.ResolveViewerTimeZone("America/New_York");
+        var result = await Client(modelHttp).CompleteAsync(
+            new AssistantRequest(
+                "Plan a round trip from university to southbank on November 19 at 10:30 a.m., returning on November 20 at 3 p.m.",
+                JourneyContext: oldContext, ViewerTimeZone: zone.Id),
+            AiEndpoints.BuildSystemPrompt("passenger", null, zone),
+            new PassengerToolRegistry(new ProposalStore(), new ServiceJsonClient(serviceHttp)),
+            CancellationToken.None, serviceTime);
+
+        Assert.Equal(new[]
+        {
+            new JourneyRequest("university", "southbank", DepartureTime: DateTimeOffset.Parse("2026-11-19T15:30:00Z")),
+            new JourneyRequest("southbank", "university", DepartureTime: DateTimeOffset.Parse("2026-11-20T20:00:00Z"))
+        }, requests);
+        Assert.Contains("Ready to leave University: Thu, Nov 19 at 10:30 AM.", result.Text);
+        Assert.Contains("Ready to leave Southbank: Fri, Nov 20 at 3:00 PM.", result.Text);
+        Assert.DoesNotContain("Airport", result.Text);
+        Assert.Null(result.JourneyContext?.SavedOutboundId);
     }
 
     [Fact]

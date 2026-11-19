@@ -50,12 +50,14 @@ internal sealed class OpenAiClient(OpenAiSettings settings, OpenAIClient? client
         var names = tools.Definitions.Select(tool => tool.Name).ToHashSet(StringComparer.Ordinal);
         var passenger = tools is PassengerToolRegistry;
         var viewerTimeZone = AiEndpoints.ResolveViewerTimeZone(request.ViewerTimeZone);
+        var journeyContext = passenger && AiEndpoints.IsExplicitRoundTrip(request.Message) &&
+            request.JourneyContext?.AwaitingReturnTime == true ? null : request.JourneyContext;
         var timing = passenger
             ? AiEndpoints.ResolvePassengerTripTiming(request, serviceTime, viewerTimeZone)
             : null;
         if (timing?.Clarification is { } clarification)
-            return new AssistantResponse(clarification, JourneyContext: request.JourneyContext);
-        var capture = new AssistantCapture(request.JourneyContext, viewerTimeZone, timing);
+            return new AssistantResponse(clarification, JourneyContext: journeyContext);
+        var capture = new AssistantCapture(journeyContext, viewerTimeZone, timing, serviceTime);
         if (passenger && capture.HasSavedOutbound && timing?.ReturnTime is not null)
         {
             await tools.ExecuteAsync("plan_journey", "{}", capture, cancellationToken);

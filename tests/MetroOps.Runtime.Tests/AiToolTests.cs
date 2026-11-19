@@ -140,7 +140,7 @@ public sealed class AiToolTests
                 {
                     TotalSeconds = 1800, ArrivesAt = departure.AddMinutes(30), Accessible = true,
                     Legs = [new() { Line = "AX", From = "union-terminal", To = "airport", Destination = "airport", WaitSeconds = 120 }],
-                    Warnings = ["Allow extra time for the lift."]
+                    Warnings = ["Restriction at union-terminal: elevator-outage: Lift out at union-terminal."]
                 }])
         };
 
@@ -153,11 +153,50 @@ public sealed class AiToolTests
         Assert.Contains("Airport Express", response.Text);
         Assert.Contains("Union Terminal", response.Text);
         Assert.Contains("wait about 2 minutes", response.Text);
-        Assert.Contains("Allow extra time for the lift.", response.Text);
+        Assert.Contains("A lift is out at Union Terminal.", response.Text);
+        Assert.DoesNotContain("toward Airport to Airport", response.Text);
         Assert.DoesNotContain("card", response.Text);
         Assert.DoesNotContain("simulated", response.Text);
         Assert.DoesNotContain("fictional", response.Text);
         Assert.Same(capture.Journey, response.Journey);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PassengerTransferShowsOnlyUsefulWarnings(bool uncertain)
+    {
+        const string schedule = "Headways are departure regulation floors, not guaranteed timetables; scheduled waits include the assigned fleet's estimated round-trip cycle.";
+        const string unknown = "The AX arrival at union-terminal serving airport is uncertain; wait uses estimated service spacing.";
+        const string stale = "The union-terminal live board is stale; wait uses the last board plus estimated service spacing.";
+        var departure = DateTimeOffset.Parse("2026-11-18T10:30:00Z");
+        var capture = new AssistantCapture(null)
+        {
+            Journey = new("scenario", 1, 2, departure, new("medical-center", "airport"),
+                [new()
+                {
+                    TotalSeconds = 2100, ArrivesAt = departure.AddMinutes(35),
+                    EstimateKind = uncertain ? "live" : "schedule",
+                    Legs = [
+                        new() { Line = "Green", From = "medical-center", To = "union-terminal", Destination = "northgate" },
+                        new() { Line = "AX", From = "union-terminal", To = "airport", Destination = "airport", WaitSeconds = 240 },
+                    ],
+                    Warnings = uncertain ? [unknown, stale] : [schedule]
+                }])
+        };
+
+        var passenger = capture.BuildResponse("");
+        Assert.Contains("Approx. arrival at Airport: 11:05 AM", passenger.Text);
+        Assert.Contains("take Green toward Northgate to Union Terminal", passenger.Text);
+        Assert.Contains("Transfer at Union Terminal: take Airport Express to Airport (wait about 4 minutes)", passenger.Text);
+        Assert.DoesNotContain("Headways", passenger.Text);
+        Assert.DoesNotContain("union-terminal", passenger.Text);
+        if (uncertain) Assert.Contains("The wait at Union Terminal may vary.", passenger.Text);
+        else Assert.DoesNotContain("may vary", passenger.Text);
+
+        var dispatch = capture.BuildResponse("", passenger: false);
+        Assert.Contains("estimate warnings on the card", dispatch.Text);
+        Assert.Equal(uncertain ? [unknown, stale] : new[] { schedule }, dispatch.Journey!.Options[0].Warnings);
     }
 
     [Theory]
