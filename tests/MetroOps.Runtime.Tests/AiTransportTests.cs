@@ -15,6 +15,8 @@ namespace MetroOps.Runtime.Tests;
 
 public sealed class AiTransportTests
 {
+    private const string AttendeeStepFreeOffer = "If you need step‑free alternatives for a specific trip or station (for example a nearby accessible station or a ramped route), tell me the origin and destination and I’ll plan an accessible route now.";
+
     [Fact]
     public async Task Signal_recovers_the_attendee_trip_and_does_not_invent_a_nearest_station()
     {
@@ -28,9 +30,8 @@ public sealed class AiTransportTests
             requests.Add(input);
             return JsonResponse(JsonSerializer.Serialize(Kernel.CheckStepFree(world, input, world.UpdatedAt), Wire.Json));
         }));
-        const string offer = "There is a lift outage at East Junction. Would you like me to plan a step-free trip?";
         using var modelHttp = new HttpClient(new Handler((_, _) =>
-            Task.FromResult(JsonResponse(TextResponse.Replace("Done.", offer)))));
+            Task.FromResult(JsonResponse(TextResponse.Replace("Done.", AttendeeStepFreeOffer)))));
         var client = Client(modelHttp);
         var tools = new PassengerToolRegistry(new ProposalStore(), new ServiceJsonClient(serviceHttp));
         var history = new List<ChatMessage>();
@@ -53,24 +54,101 @@ public sealed class AiTransportTests
                 Assert.Contains("Union Terminal", answer.Text);
                 Assert.Contains("Riverbank", answer.Text);
                 Assert.Contains("650 m", answer.Text);
-                Assert.Contains("rail", answer.Text, StringComparison.OrdinalIgnoreCase);
                 Assert.Contains("free on-demand ride", answer.Text);
                 Assert.DoesNotContain("West Junction", answer.Text);
                 Assert.DoesNotContain("No accessible route is available under current restrictions.", answer.Text);
-                Assert.DoesNotContain("Would you like me to plan", answer.Text);
+                if (message == messages[^1])
+                {
+                    Assert.Equal(["check_step_free_access"], answer.Tools);
+                    Assert.Equal(context, answer.JourneyContext);
+                    Assert.DoesNotContain("Airport", answer.Text);
+                }
+                else
+                {
+                    Assert.Contains("rail", answer.Text, StringComparison.OrdinalIgnoreCase);
+                }
             }
             history.Add(new("user", message));
             history.Add(new("assistant", answer.Text));
             context = answer.JourneyContext;
         }
         Assert.Equal(4, requests.Count);
-        Assert.All(requests, trip => Assert.Equal(new StepFreeRequest("east-junction", "airport"), trip));
+        Assert.All(requests.Take(3), trip => Assert.Equal(new StepFreeRequest("east-junction", "airport"), trip));
+        Assert.Equal(new StepFreeRequest("east-junction"), requests[^1]);
 
         var standalone = await client.CompleteAsync(new(messages[^1]), "", tools, CancellationToken.None, world.SimTime);
         Assert.Contains("Union Terminal", standalone.Text);
         Assert.Contains("walking", standalone.Text);
         Assert.DoesNotContain("Airport", standalone.Text);
         Assert.Equal(new StepFreeRequest("east-junction"), requests[^1]);
+    }
+
+    [Theory]
+    [InlineData("3 p.m.", true)]
+    [InlineData("15:00", true)]
+    [InlineData("3 p.m.", false)]
+    public async Task Signal_applies_only_the_latest_step_free_offer_and_preserves_a_supplied_time(string time, bool immediate)
+    {
+        var world = Kernel.Create();
+        var departure = new DateTimeOffset(world.SimTime.Date.AddHours(15), TimeSpan.Zero);
+        using var serviceHttp = new HttpClient(new Handler(async (request, _) =>
+        {
+            var body = await request.Content!.ReadAsStringAsync();
+            if (immediate)
+            {
+                Assert.Equal("/step-free", request.RequestUri!.AbsolutePath);
+                var input = JsonSerializer.Deserialize<StepFreeRequest>(body, Wire.Json)!;
+                Assert.Equal(new StepFreeRequest("east-junction", "airport", departure), input);
+                return JsonResponse(JsonSerializer.Serialize(Kernel.CheckStepFree(world, input, world.UpdatedAt), Wire.Json));
+            }
+            Assert.Equal("/journeys", request.RequestUri!.AbsolutePath);
+            var journey = JsonSerializer.Deserialize<JourneyRequest>(body, Wire.Json)!;
+            Assert.Equal(new JourneyRequest("east-junction", "airport", DepartureTime: departure), journey);
+            return JsonResponse(JsonSerializer.Serialize(Kernel.Plan(world, journey), Wire.Json));
+        }));
+        var responses = new Queue<string>(
+        [
+            PlanCallResponse(new { origin = "east junction", destination = "airport", accessible = false, departureTime = departure }),
+            TextResponse
+        ]);
+        using var modelHttp = new HttpClient(new Handler((_, _) => Task.FromResult(JsonResponse(responses.Dequeue()))));
+        List<ChatMessage> history = [new("assistant", AttendeeStepFreeOffer)];
+        if (!immediate)
+            history.AddRange([new("user", "What time is it?"), new("assistant", "It's 1 PM.")]);
+
+        var result = await Client(modelHttp).CompleteAsync(new($"I want to go from east junction to the airport at {time}", history),
+            "", new PassengerToolRegistry(new ProposalStore(), new ServiceJsonClient(serviceHttp)), CancellationToken.None);
+
+        Assert.Equal(immediate, result.JourneyContext?.Accessible);
+        Assert.Equal(departure, result.JourneyContext?.DepartureTime);
+    }
+
+    [Fact]
+    public async Task Named_station_lookup_does_not_skip_the_nearest_entrance_when_its_rail_links_are_closed()
+    {
+        var world = Kernel.Create();
+        world.Incidents.Add(new() { Kind = "elevator-outage", Target = "east-junction", State = "active" });
+        foreach (var station in new[] { "east-junction", "central-exchange", "university", "museum-quarter" })
+            world.Incidents.Add(new() { Kind = "segment-closure", Target = $"union-terminal>{station}", State = "active" });
+        var rail = Kernel.CheckStepFree(world, new("east-junction", "airport"), world.UpdatedAt);
+        Assert.NotEmpty(rail.Alternatives);
+        Assert.DoesNotContain(rail.Alternatives, option => option.StationId == "union-terminal");
+
+        using var serviceHttp = new HttpClient(new Handler(async (request, _) =>
+        {
+            var input = JsonSerializer.Deserialize<StepFreeRequest>(await request.Content!.ReadAsStringAsync(), Wire.Json)!;
+            Assert.Equal(new StepFreeRequest("east-junction"), input);
+            return JsonResponse(JsonSerializer.Serialize(Kernel.CheckStepFree(world, input, world.UpdatedAt), Wire.Json));
+        }));
+        using var modelHttp = new HttpClient(new Handler((_, _) => throw new InvalidOperationException("No inference needed.")));
+        var context = new AssistantJourneyContext("east-junction", "airport", Accessible: true, DepartureTime: world.SimTime.AddHours(2));
+        var result = await Client(modelHttp).CompleteAsync(new("what's the nearest accessible station right now to east junction",
+                [new("assistant", "I couldn't find a step-free rail trip from East Junction to Airport.")], context),
+            "", new PassengerToolRegistry(new ProposalStore(), new ServiceJsonClient(serviceHttp)), CancellationToken.None);
+
+        Assert.Contains("Union Terminal: 650 m", result.Text);
+        Assert.DoesNotContain("Airport", result.Text);
+        Assert.Equal(context, result.JourneyContext);
     }
 
     [Fact]
