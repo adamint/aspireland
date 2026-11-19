@@ -16,9 +16,13 @@ namespace MetroOps.Runtime.Tests;
 public sealed class AiTransportTests
 {
     private const string AttendeeStepFreeOffer = "If you need step‑free alternatives for a specific trip or station (for example a nearby accessible station or a ramped route), tell me the origin and destination and I’ll plan an accessible route now.";
+    private const string AttendeeOutageReply = "Current active elevator outages: East Junction — elevator outage. That's the only elevator incident showing.";
 
-    [Fact]
-    public async Task Signal_recovers_the_attendee_trip_and_does_not_invent_a_nearest_station()
+    [Theory]
+    [InlineData(false, AttendeeStepFreeOffer)]
+    [InlineData(true, AttendeeStepFreeOffer)]
+    [InlineData(true, AttendeeOutageReply)]
+    public async Task Signal_recovers_the_attendee_trip_and_does_not_invent_a_nearest_station(bool browserHistory, string outageReply)
     {
         var world = Kernel.Create();
         world.Incidents.Add(new() { Kind = "elevator-outage", Target = "east-junction", State = "active" });
@@ -31,20 +35,21 @@ public sealed class AiTransportTests
             return JsonResponse(JsonSerializer.Serialize(Kernel.CheckStepFree(world, input, world.UpdatedAt), Wire.Json));
         }));
         using var modelHttp = new HttpClient(new Handler((_, _) =>
-            Task.FromResult(JsonResponse(TextResponse.Replace("Done.", AttendeeStepFreeOffer)))));
+            Task.FromResult(JsonResponse(TextResponse.Replace("Done.", outageReply)))));
         var client = Client(modelHttp);
         var tools = new PassengerToolRegistry(new ProposalStore(), new ServiceJsonClient(serviceHttp));
         var history = new List<ChatMessage>();
         AssistantJourneyContext? context = null;
         var messages = new[]
         {
-            "Are there any elevator outages?", "I want to go from east junction to the airport",
+            "Which elevators are out right now?", "I want to go from east junction to the airport",
             "but accessibility ??", "what is the nearest best accessible route i can take?",
             "what's the nearest accessible station right now to east junction"
         };
         foreach (var message in messages)
         {
-            var answer = await client.CompleteAsync(new(message, [.. history], context),
+            var wireHistory = browserHistory ? BrowserHistory(history, message) : [.. history];
+            var answer = await client.CompleteAsync(new(message, wireHistory, context),
                 AiEndpoints.BuildSystemPrompt("passenger", null, TimeZoneInfo.Utc), tools, CancellationToken.None, world.SimTime);
             if (history.Count != 0)
             {
@@ -87,6 +92,7 @@ public sealed class AiTransportTests
     [InlineData("outage", true)]
     [InlineData("unrelated", false)]
     [InlineData("intervening", false)]
+    [InlineData("unanswered", false)]
     [InlineData("previous trip", false)]
     [InlineData("opt-out", false)]
     public async Task Signal_uses_only_the_immediately_preceding_rider_access_exchange(string scenario, bool stepFree)
@@ -96,12 +102,14 @@ public sealed class AiTransportTests
         List<ChatMessage> history =
         [
             new("user", "Which elevators are out right now?"),
-            new("assistant", "Current active elevator outages: East Junction — elevator outage. That's the only elevator incident showing.")
+            new("assistant", AttendeeOutageReply)
         ];
         if (scenario == "unrelated")
             history = [new("user", "Which lines serve East Junction?"), new("assistant", "Blue and Amber serve East Junction.")];
         if (scenario == "intervening")
             history.AddRange([new("user", "What time is it?"), new("assistant", "It's 1 PM.")]);
+        if (scenario == "unanswered")
+            history.Add(new("user", "What time is it?"));
         if (scenario == "previous trip")
             history = [new("user", "Plan a step-free trip from University to Southbank."), new("assistant", "Take Green to Southbank.")];
         var message = scenario == "opt-out"
@@ -130,13 +138,17 @@ public sealed class AiTransportTests
         ]);
         using var modelHttp = new HttpClient(new Handler((_, _) => Task.FromResult(JsonResponse(responses.Dequeue()))));
 
-        var result = await Client(modelHttp).CompleteAsync(new(message, history), "",
+        var wireHistory = scenario == "unanswered" ? history : BrowserHistory(history, message);
+        var result = await Client(modelHttp).CompleteAsync(new(message, wireHistory), "",
             new PassengerToolRegistry(new ProposalStore(), new ServiceJsonClient(serviceHttp)), CancellationToken.None);
 
         Assert.Equal(stepFree, result.JourneyContext?.Accessible);
         if (stepFree)
             Assert.Contains("Union Terminal", result.Text);
     }
+
+    private static List<ChatMessage> BrowserHistory(List<ChatMessage> history, string message) =>
+        [.. history.Append(new("user", message)).TakeLast(8)];
 
     [Theory]
     [InlineData("3 p.m.", true)]

@@ -36,7 +36,13 @@ internal sealed record PassengerAccessIntent(bool? Accessible, string? Tool = nu
     {
         var text = request.Message.Trim();
         if (OptOut.IsMatch(text)) return new(false);
-        var previous = request.History?.LastOrDefault();
+        var history = request.History;
+        var historyCount = history?.Count ?? 0;
+        // The browser includes the current user message in both message and history.
+        if (historyCount > 0 && history![historyCount - 1] is { Role: "user", Content: var last } &&
+            last == request.Message)
+            historyCount--;
+        var previous = historyCount > 0 ? history![historyCount - 1] : null;
         var context = request.JourneyContext;
         var continuing = context is not null && previous is { Role: "assistant" } &&
             Network.Resolve(context.Destination) is { } recentDestination &&
@@ -51,7 +57,7 @@ internal sealed record PassengerAccessIntent(bool? Accessible, string? Tool = nu
         var trip = Trip.Match(text);
         var followsAccessExchange = previous is { Role: "assistant" } && (trip.Success || TripWithDetails.IsMatch(text)) &&
             (Offer.IsMatch(previous.Content) ||
-             request.History is { Count: >= 2 } history && history[^2] is { Role: "user", Content: var prior } &&
+             historyCount >= 2 && history![historyCount - 2] is { Role: "user", Content: var prior } &&
              !OptOut.IsMatch(prior) && !TripWithDetails.IsMatch(prior) &&
              (Access.IsMatch(prior) || Lift.IsMatch(prior) && AccessStatus.IsMatch(prior)));
         if (trip.Success && (explicitAccess || followsAccessExchange) && !TimeCue.IsMatch(text) &&
