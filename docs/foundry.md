@@ -1,8 +1,13 @@
-# Enable Foundry (optional)
+# Configure Foundry
 
-Leave Foundry unconfigured for local development without Azure and for the
-[single-host demo](deploy.md). The simulator, Dispatch controls, station boards
-and ordinary journey planning don't need it. Attendee Signal text chat is off
+Local development uses the existing Aspireland Foundry `chat` deployment in
+`appsettings.Development.json`. Sign in with `az login` using an identity with
+inference access. The default has no credentials, doesn't provision Azure
+resources, and doesn't enable voice.
+
+To run without Azure, start with `ConnectionStrings__chat=''` and leave any
+voice connections unset. The simulator, Dispatch controls, station boards and
+ordinary journey planning don't need Foundry. Attendee Signal text chat is off
 by default, even if the local sites are configured. See
 [the attendee opt-in](deploy.md#enable-signal-text-chat-optional). Attendees
 never get recording, speech, or Dispatch access.
@@ -47,9 +52,10 @@ is observable; prompts, responses and audio aren't captured in telemetry.
 ## Use existing deployments
 
 Keep `MetroOps:ProvisionFoundry=false` to use an already-provisioned account
-without changing Azure resources. Supply private AppHost configuration for
-`ConnectionStrings:chat`, `ConnectionStrings:transcription` and
-`ConnectionStrings:speech`, plus `Azure:TenantId`. Each connection has this form:
+without changing Azure resources. To override the default chat deployment or
+enable voice, supply private AppHost configuration for `ConnectionStrings:chat`,
+`ConnectionStrings:transcription` or `ConnectionStrings:speech` as needed. Set
+`Azure:TenantId` if you need to select a tenant. Each connection has this form:
 
 ```text
 Endpoint=<exact HTTPS Azure account root>/;Deployment=<chat, transcription or speech>
@@ -106,7 +112,8 @@ start recording and tap again to stop. The transcript goes into the draft so
 you can edit it before sending.
 
 To turn Foundry off, stop the AppHost and restart with
-`MetroOps__ProvisionFoundry=false` and no existing model connection strings.
+`MetroOps__ProvisionFoundry=false`, `ConnectionStrings__chat=''`, and no
+transcription or speech connection strings.
 The flag controls provisioning, not access to existing deployments. Stopping
 Aspire doesn't delete the Azure resources. Remove them separately when you no
 longer need them.

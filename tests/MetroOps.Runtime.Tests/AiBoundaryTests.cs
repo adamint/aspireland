@@ -20,6 +20,21 @@ namespace MetroOps.Runtime.Tests;
 public sealed class AiBoundaryTests
 {
     [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void FoundryChatConfiguresWithoutAnExplicitTenant(string? tenantId)
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.Configuration["ConnectionStrings:chat"] =
+            "Endpoint=https://example.cognitiveservices.azure.com/;Deployment=chat";
+        builder.Configuration["AZURE_TENANT_ID"] = tenantId;
+
+        AiEndpoints.ConfigureServices(builder);
+
+        Assert.True(OpenAiSettings.FromConfiguration(builder.Configuration).TextEnabled);
+    }
+
+    [Theory]
     [InlineData("GET", "/operator/capabilities")]
     [InlineData("POST", "/operator/assistant")]
     [InlineData("GET", "/operator/proposals/example")]

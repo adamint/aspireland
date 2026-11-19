@@ -40,7 +40,8 @@ The AppHost and core integrations are pinned to GA 17.0.0. The optional
 `Aspire.Hosting.Foundry` and
 `Aspire.Azure.AI.Extensions.OpenAI` integrations only ship as
 `17.0.0-preview.1.26567.5` in that release train; those two packages remain
-preview. Foundry stays off unless explicitly enabled.
+preview. Normal local starts use an existing Foundry deployment for text chat
+and don't provision Azure resources.
 
 Open **Rider site** on `passenger-web` or **Dispatch console** on
 `operations-web` in the Aspire Dashboard's Resources view. Local ports change
@@ -82,9 +83,11 @@ See [the runbook](docs/deploy.md#keep-the-world) before relying on a saved world
 3. Clear that incident from **Needs attention**. Watch the station board and
    plan the journey again.
 
-AI is off by default. You can run the full simulation, operate the network, and
-plan journeys without Azure. To provision a separate Foundry account for
-the local assistants, see [Enable Foundry](docs/foundry.md).
+Trip Chat uses the existing Foundry deployment in local development. Run
+`az login` with an account that has inference access before using it. To run
+without Azure, start with `ConnectionStrings__chat=''`. The simulation,
+Dispatch controls, and trip planner still work. See [Foundry setup](docs/foundry.md)
+to use a different deployment or enable voice.
 
 For a longer check, [`tests/smoke.py`](tests/smoke.py) exercises train turnbacks,
 passenger conservation, accessible rerouting, forecast comparisons, and

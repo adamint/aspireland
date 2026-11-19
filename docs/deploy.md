@@ -15,8 +15,8 @@ Use a dedicated host or VM with the [local prerequisites](../README.md#run-it-lo
 and [Caddy 2](https://caddyserver.com/docs/install). Use a dedicated OS account
 for Aspire that can run Docker. Keep Docker and the host account private.
 Check out a specific Git revision and run all Aspire commands from that same
-clone. Leave Foundry unconfigured for the default demo; there's no model
-dependency or cost unless you opt in to Signal below.
+clone. The command below overrides the local-development chat default, so the
+single-host demo doesn't need Foundry unless you opt in to Signal below.
 
 Set the ingress rules **before** starting Aspire:
 
@@ -50,7 +50,7 @@ export MetroOps__PostgresVolume=metroops-demo-postgres
 
 npm ci --prefix web
 npm run build:conference --prefix web
-env MetroOps__ProvisionFoundry=false \
+env MetroOps__ProvisionFoundry=false ConnectionStrings__chat='' \
   "Parameters__postgres-password=$(cat "$HOME/.config/metroops/postgres-password")" \
   aspire start --launch-profile demo --non-interactive
 aspire wait passenger-api --timeout 180 --non-interactive
@@ -122,9 +122,10 @@ existing port and its expiring access rule without rewriting them.
 ### Enable Signal text chat (optional)
 
 Use the sealed build from this revision; don't share the private Passenger
-site to turn on chat. If [Foundry](foundry.md) is already configured for chat,
-check that the private `passenger-api` returns `text: true` at
-`/api/capabilities`. Start just the attendee origin with the opt-in:
+site to turn on chat. Start Aspire without the empty `ConnectionStrings__chat`
+override, using an Azure CLI identity with [Foundry inference access](foundry.md).
+Check that the private `passenger-api` returns `text: true` at `/api/capabilities`.
+Start the attendee origin with the opt-in:
 
 ```sh
 CONFERENCE_SIGNAL_CHAT=true npm run start:conference --prefix web -- \

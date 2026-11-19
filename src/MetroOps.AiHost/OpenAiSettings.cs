@@ -6,7 +6,7 @@ namespace MetroOps.AiHost;
 internal sealed class OpenAiSettings
 {
     public string? ConnectionName { get; init; }
-    public string AzureTenantId { get; init; } = "";
+    public string? AzureTenantId { get; init; }
     public string TextModel { get; init; } = "";
     public string TranscriptionModel { get; init; } = "";
     public string SpeechModel { get; init; } = "";
@@ -43,10 +43,11 @@ internal sealed class OpenAiSettings
         var chat = Deployment("chat");
         var transcription = Deployment("transcription");
         var speech = Deployment("speech");
+        var tenantId = configuration["AZURE_TENANT_ID"];
         return new OpenAiSettings
         {
             ConnectionName = connectionName,
-            AzureTenantId = configuration["AZURE_TENANT_ID"] ?? "",
+            AzureTenantId = string.IsNullOrWhiteSpace(tenantId) ? null : tenantId.Trim(),
             TextModel = chat,
             TranscriptionModel = transcription,
             SpeechModel = speech,
